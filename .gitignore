@@ -1,4 +1,8 @@
+# Build outputs
 *.o
 *.exe
+build/
+
+# Runtime data
 *.dat
 *.msrep

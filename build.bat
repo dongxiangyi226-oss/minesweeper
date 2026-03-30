@@ -4,30 +4,34 @@ echo   Minesweeper Build
 echo ============================================
 
 set CC=gcc
-set CFLAGS=-Wall -Wextra -O2
+set CFLAGS=-Wall -Wextra -O2 -Iinclude
 set UFLAGS=-DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0600
 set LIBS=-lgdi32 -lwinmm -lcomdlg32 -lws2_32 -mwindows -municode
+set OUT=minesweeper.exe
 
-%CC% %CFLAGS% -c board.c -o board.o          && echo   [OK] board.c    || goto :err
-%CC% %CFLAGS% -c solver.c -o solver.o        && echo   [OK] solver.c   || goto :err
-%CC% %CFLAGS% -c game.c -o game.o            && echo   [OK] game.c     || goto :err
-%CC% %CFLAGS% %UFLAGS% -c render.c -o render.o && echo   [OK] render.c  || goto :err
-%CC% %CFLAGS% -c replay.c -o replay.o        && echo   [OK] replay.c   || goto :err
-%CC% %CFLAGS% -c stats.c -o stats.o          && echo   [OK] stats.c    || goto :err
-%CC% %CFLAGS% -c sound.c -o sound.o          && echo   [OK] sound.c    || goto :err
-%CC% %CFLAGS% -c user.c -o user.o            && echo   [OK] user.c     || goto :err
-%CC% %CFLAGS% %UFLAGS% -c net.c -o net.o     && echo   [OK] net.c      || goto :err
-%CC% %CFLAGS% %UFLAGS% -c main.c -o main.o   && echo   [OK] main.c     || goto :err
+if not exist build mkdir build
+
+%CC% %CFLAGS% -c src/board.c   -o build/board.o   && echo   [OK] board.c    || goto :err
+%CC% %CFLAGS% -c src/solver.c  -o build/solver.o  && echo   [OK] solver.c   || goto :err
+%CC% %CFLAGS% -c src/game.c    -o build/game.o    && echo   [OK] game.c     || goto :err
+%CC% %CFLAGS% %UFLAGS% -c src/render.c -o build/render.o && echo   [OK] render.c  || goto :err
+%CC% %CFLAGS% -c src/replay.c  -o build/replay.o  && echo   [OK] replay.c   || goto :err
+%CC% %CFLAGS% -c src/stats.c   -o build/stats.o   && echo   [OK] stats.c    || goto :err
+%CC% %CFLAGS% -c src/sound.c   -o build/sound.o   && echo   [OK] sound.c    || goto :err
+%CC% %CFLAGS% -c src/user.c    -o build/user.o    && echo   [OK] user.c     || goto :err
+%CC% %CFLAGS% %UFLAGS% -c src/net.c -o build/net.o && echo   [OK] net.c      || goto :err
+%CC% %CFLAGS% %UFLAGS% -c src/main.c -o build/main.o && echo   [OK] main.c     || goto :err
 
 echo   Linking...
-%CC% -o minesweeper.exe board.o solver.o game.o render.o replay.o stats.o sound.o user.o net.o main.o %LIBS% || goto :err
+%CC% -o %OUT% build/board.o build/solver.o build/game.o build/render.o build/replay.o build/stats.o build/sound.o build/user.o build/net.o build/main.o %LIBS% || goto :err
 
-del *.o 2>nul
+rd /s /q build 2>nul
 echo.
-echo   Build OK! Run minesweeper.exe
+echo   Build OK!  Run %OUT%
 echo ============================================
 goto :eof
 
 :err
+echo.
 echo   BUILD FAILED!
 pause
