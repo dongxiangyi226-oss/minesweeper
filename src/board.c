@@ -17,6 +17,25 @@ static int idx(Board *b, int x, int y)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Neighbor lookup (toroidal-aware)                                   */
+/* ------------------------------------------------------------------ */
+
+int board_get_neighbor(Board *b, int x, int y, int dir, int *nx, int *ny)
+{
+    int tx = x + DX[dir];
+    int ty = y + DY[dir];
+    if (b->toroidal) {
+        *nx = (tx + b->width) % b->width;
+        *ny = (ty + b->height) % b->height;
+        return 1;  /* always valid in toroidal mode */
+    } else {
+        *nx = tx;
+        *ny = ty;
+        return board_in_bounds(b, tx, ty);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Creation / destruction / reset                                     */
 /* ------------------------------------------------------------------ */
 
@@ -35,6 +54,7 @@ Board *board_create(int w, int h, int mines)
     b->flagged_count  = 0;
     b->state          = STATE_READY;
     b->first_click    = 1;
+    b->toroidal       = 0;  /* default: normal mode */
 
     return b;
 }
@@ -55,6 +75,7 @@ void board_reset(Board *b)
     b->flagged_count  = 0;
     b->state          = STATE_READY;
     b->first_click    = 1;
+    /* Don't reset toroidal — it's a game mode setting, not per-game state */
 }
 
 /* ------------------------------------------------------------------ */
@@ -95,10 +116,20 @@ void board_place_mines(Board *b, int sx, int sy)
         /* Skip if already a mine */
         if (b->cells[r].flags & CELL_MINE) continue;
 
-        /* Skip the safe zone: (sx,sy) and its 8 neighbors */
-        int dx = rx - sx;
-        int dy = ry - sy;
-        if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) continue;
+        /* Skip the safe zone: (sx,sy) itself */
+        if (rx == sx && ry == sy) continue;
+
+        /* Skip 8 neighbors of (sx,sy), respecting toroidal mode */
+        int in_safe_zone = 0;
+        for (int d = 0; d < 8; d++) {
+            int nx, ny;
+            if (!board_get_neighbor(b, sx, sy, d, &nx, &ny)) continue;
+            if (rx == nx && ry == ny) {
+                in_safe_zone = 1;
+                break;
+            }
+        }
+        if (in_safe_zone) continue;
 
         b->cells[r].flags |= CELL_MINE;
         placed++;
@@ -113,9 +144,9 @@ int board_count_adjacent_mines(Board *b, int x, int y)
 {
     int count = 0;
     for (int d = 0; d < 8; d++) {
-        int nx = x + DX[d];
-        int ny = y + DY[d];
-        if (board_in_bounds(b, nx, ny) && (b->cells[idx(b, nx, ny)].flags & CELL_MINE))
+        int nx, ny;
+        if (!board_get_neighbor(b, x, y, d, &nx, &ny)) continue;
+        if (b->cells[idx(b, nx, ny)].flags & CELL_MINE)
             count++;
     }
     return count;
@@ -125,9 +156,9 @@ int board_count_adjacent_flags(Board *b, int x, int y)
 {
     int count = 0;
     for (int d = 0; d < 8; d++) {
-        int nx = x + DX[d];
-        int ny = y + DY[d];
-        if (board_in_bounds(b, nx, ny) && (b->cells[idx(b, nx, ny)].flags & CELL_FLAGGED))
+        int nx, ny;
+        if (!board_get_neighbor(b, x, y, d, &nx, &ny)) continue;
+        if (b->cells[idx(b, nx, ny)].flags & CELL_FLAGGED)
             count++;
     }
     return count;
@@ -137,9 +168,9 @@ int board_count_adjacent_unrevealed(Board *b, int x, int y)
 {
     int count = 0;
     for (int d = 0; d < 8; d++) {
-        int nx = x + DX[d];
-        int ny = y + DY[d];
-        if (board_in_bounds(b, nx, ny) && !(b->cells[idx(b, nx, ny)].flags & CELL_REVEALED))
+        int nx, ny;
+        if (!board_get_neighbor(b, x, y, d, &nx, &ny)) continue;
+        if (!(b->cells[idx(b, nx, ny)].flags & CELL_REVEALED))
             count++;
     }
     return count;
@@ -210,9 +241,8 @@ int board_reveal(Board *b, int x, int y)
         if (cc->number != 0) continue;
 
         for (int d = 0; d < 8; d++) {
-            int nx = cx + DX[d];
-            int ny = cy + DY[d];
-            if (!board_in_bounds(b, nx, ny)) continue;
+            int nx, ny;
+            if (!board_get_neighbor(b, cx, cy, d, &nx, &ny)) continue;
 
             int ni = idx(b, nx, ny);
             Cell *nc = &b->cells[ni];
@@ -228,6 +258,80 @@ int board_reveal(Board *b, int x, int y)
     free(queue);
     board_check_win(b);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reveal collect (non-destructive BFS for animation)                 */
+/* ------------------------------------------------------------------ */
+
+int board_reveal_collect(Board *b, int x, int y, int *out_cells, int *out_count)
+{
+    *out_count = 0;
+    if (!board_in_bounds(b, x, y)) return 0;
+
+    Cell *c = board_cell(b, x, y);
+    if (c->flags & (CELL_REVEALED | CELL_FLAGGED)) return 0;
+
+    /* Mine hit */
+    if (c->flags & CELL_MINE) {
+        c->flags |= CELL_REVEALED;
+        b->revealed_count++;
+        return -1;
+    }
+
+    int total = b->width * b->height;
+    uint8_t *visited = (uint8_t *)calloc(total, 1);
+    if (!visited) return 0;
+
+    /* BFS queue */
+    int *queue = (int *)malloc(total * sizeof(int));
+    if (!queue) { free(visited); return 0; }
+    int qfront = 0, qback = 0;
+
+    int start = y * b->width + x;
+    queue[qback++] = start;
+    visited[start] = 1;
+
+    while (qfront < qback) {
+        int cur = queue[qfront++];
+        out_cells[(*out_count)++] = cur;
+
+        int cx = cur % b->width;
+        int cy = cur / b->width;
+        Cell *cc = &b->cells[cur];
+
+        /* Only expand if this cell is a zero */
+        if (cc->number == 0) {
+            for (int d = 0; d < 8; d++) {
+                int nx, ny;
+                if (!board_get_neighbor(b, cx, cy, d, &nx, &ny)) continue;
+                int nidx = ny * b->width + nx;
+                if (visited[nidx]) continue;
+                Cell *nc = &b->cells[nidx];
+                if (nc->flags & (CELL_REVEALED | CELL_FLAGGED | CELL_MINE)) continue;
+                visited[nidx] = 1;
+                queue[qback++] = nidx;
+            }
+        }
+    }
+
+    free(queue);
+    free(visited);
+    return *out_count;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reveal single cell (for animation playback)                        */
+/* ------------------------------------------------------------------ */
+
+void board_reveal_single(Board *b, int flat_idx)
+{
+    if (flat_idx < 0 || flat_idx >= b->width * b->height) return;
+    Cell *c = &b->cells[flat_idx];
+    if (c->flags & CELL_REVEALED) return;
+    c->flags |= CELL_REVEALED;
+    c->flags &= ~(CELL_FLAGGED | CELL_QUESTION);
+    b->revealed_count++;
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,9 +383,8 @@ int board_chord(Board *b, int x, int y)
     int hit_mine = 0;
 
     for (int d = 0; d < 8; d++) {
-        int nx = x + DX[d];
-        int ny = y + DY[d];
-        if (!board_in_bounds(b, nx, ny)) continue;
+        int nx, ny;
+        if (!board_get_neighbor(b, x, y, d, &nx, &ny)) continue;
 
         Cell *nc = &b->cells[idx(b, nx, ny)];
 

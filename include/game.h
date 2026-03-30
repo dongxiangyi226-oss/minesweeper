@@ -21,6 +21,21 @@ typedef struct {
     int press_active;           /* 1 = cells are visually pressed */
     /* Exploded mine tracking */
     int explode_x, explode_y;   /* the mine cell that was clicked (-1 if none) */
+    /* Animation queue (cascade reveal, win/loss effects) */
+    int    anim_active;         /* 1 = animation in progress, blocks input */
+    int   *anim_cells;          /* flat indices to reveal, in BFS order */
+    int    anim_count;          /* total cells in animation queue */
+    int    anim_index;          /* next cell to reveal */
+    int    anim_type;           /* 0=cascade, 1=win reveal, 2=loss mines */
+    /* Keyboard cursor */
+    int    cursor_x, cursor_y;  /* keyboard cursor position */
+    int    cursor_visible;      /* 1 = show cursor */
+    int    cursor_blink;        /* animation counter for pulse */
+    /* AI auto-play */
+    int    autoplay_active;     /* 1 = solver auto-playing */
+    int    autoplay_hl_x, autoplay_hl_y;  /* highlighted "reason" cell */
+    /* Toroidal mode (donut topology) */
+    int    toroidal_mode;       /* 1 = edges wrap around */
 } Game;
 
 Game *game_create(void);

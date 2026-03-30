@@ -4,21 +4,33 @@
 #include <windows.h>
 #include "game.h"
 
+/* ---- Color Theme ---- */
+typedef struct {
+    unsigned long bg, cell_raised, cell_revealed, cell_pressed;
+    unsigned long border_white, border_ltgray, border_dkgray, border_black;
+    unsigned long led_bg, led_fg;
+    unsigned long toolbar_bg, toolbar_active;
+    unsigned long fog_color, explode_bg, mine_color, flag_color, cursor_color;
+    unsigned long num_colors[9]; /* [0] unused, [1]-[8] */
+} ColorTheme;
+
 /* ---- Constants ---- */
-#define CELL_SIZE       30      /* pixels per cell */
-#define HEADER_HEIGHT   56      /* top status bar height */
-#define TOOLBAR_HEIGHT  36      /* bottom toolbar height */
-#define BORDER_SIZE     10      /* border around minefield */
+#define CELL_SIZE       30
+#define HEADER_HEIGHT   56
+#define TOOLBAR_HEIGHT  36
+#define BORDER_SIZE     10
+#define THEME_COUNT     4
 
 /* ---- Renderer ---- */
 typedef struct {
-    HDC     mem_dc;             /* memory DC for double buffering */
-    HBITMAP mem_bmp;            /* memory bitmap */
+    HDC     mem_dc;
+    HBITMAP mem_bmp;
     HBITMAP old_bmp;
-    int     buf_w, buf_h;      /* buffer dimensions */
-    HFONT   font_num;          /* font for cell numbers */
-    HFONT   font_header;       /* font for header (mine count, timer) */
-    HFONT   font_toolbar;      /* font for toolbar buttons */
+    int     buf_w, buf_h;
+    HFONT   font_num;
+    HFONT   font_header;
+    HFONT   font_toolbar;
+    int     theme_index;        /* current theme 0-3 */
 } Renderer;
 
 /* Create / destroy renderer */
@@ -40,5 +52,9 @@ int  render_toolbar_hit(int board_w, int board_h, int client_w, int px, int py);
 
 /* Check if pixel is on the face button in header. */
 int  render_face_hit(int board_w, int client_w, int px, int py);
+
+/* Theme management */
+void render_set_theme(Renderer *r, int index);
+const ColorTheme *render_get_theme(Renderer *r);
 
 #endif /* RENDER_H */

@@ -46,6 +46,19 @@ Game *game_create(void)
     g->press_active   = 0;
     g->explode_x      = -1;
     g->explode_y      = -1;
+    g->anim_active    = 0;
+    g->anim_cells     = NULL;
+    g->anim_count     = 0;
+    g->anim_index     = 0;
+    g->anim_type      = 0;
+    g->cursor_x       = 0;
+    g->cursor_y       = 0;
+    g->cursor_visible = 0;
+    g->cursor_blink   = 0;
+    g->autoplay_active = 0;
+    g->autoplay_hl_x  = -1;
+    g->autoplay_hl_y  = -1;
+    g->toroidal_mode  = 0;
     g->board          = NULL;
 
     /* Create the initial board (beginner) */
@@ -128,30 +141,59 @@ void game_left_click(Game *g, int x, int y)
         }
         b->first_click = 0;
         b->state = STATE_PLAYING;
-
-        int hit = board_reveal(b, x, y);
-        if (hit) {
-            /* Should not happen on first click, but handle defensively */
-            b->state = STATE_LOST;
-            board_reveal_all_mines(b);
-            return;
-        }
-        if (board_check_win(b)) {
-            b->state = STATE_WON;
-        }
-        return;
+        /* Fall through to the reveal logic below */
     }
 
-    /* ---- Subsequent clicks ---- */
+    /* ---- Reveal with animation ---- */
     if (b->state == STATE_PLAYING) {
-        int hit = board_reveal(b, x, y);
-        if (hit) {
+        /* Collect cells in BFS order for animation */
+        int *cells = (int *)malloc(b->width * b->height * sizeof(int));
+        int count = 0;
+        int result = board_reveal_collect(b, x, y, cells, &count);
+
+        if (result == -1) {
+            /* Mine hit */
+            free(cells);
             b->state = STATE_LOST;
             g->explode_x = x;
             g->explode_y = y;
-            board_reveal_all_mines(b);
+            /* Collect mine positions for animated reveal */
+            int total = b->width * b->height;
+            int *mine_cells = (int *)malloc(total * sizeof(int));
+            int mine_count = 0;
+            for (int i = 0; i < total; i++) {
+                if ((b->cells[i].flags & CELL_MINE) && !(b->cells[i].flags & CELL_REVEALED)) {
+                    mine_cells[mine_count++] = i;
+                }
+            }
+            if (mine_count > 0) {
+                g->anim_cells = mine_cells;
+                g->anim_count = mine_count;
+                g->anim_index = 0;
+                g->anim_type  = 2;  /* loss: reveal mines */
+                g->anim_active = 1;
+            } else {
+                free(mine_cells);
+            }
             return;
         }
+
+        if (count <= 1) {
+            /* Single cell or no cells: reveal immediately, no animation */
+            for (int i = 0; i < count; i++)
+                board_reveal_single(b, cells[i]);
+            free(cells);
+        } else {
+            /* Multiple cells: start cascade animation */
+            g->anim_cells = cells;
+            g->anim_count = count;
+            g->anim_index = 0;
+            g->anim_type  = 0;  /* cascade reveal */
+            g->anim_active = 1;
+            /* Caller (main.c) will start TIMER_ANIM */
+            return;  /* win check deferred to animation completion */
+        }
+
         if (board_check_win(b)) {
             b->state = STATE_WON;
         }

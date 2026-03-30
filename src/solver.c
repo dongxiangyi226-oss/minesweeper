@@ -886,3 +886,70 @@ cleanup:
     free(front_y);
     free(front_id);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Step-by-step solver (for auto-play visualization)                 */
+/* ------------------------------------------------------------------ */
+int solver_step(Board *b, SolverAction *out)
+{
+    int w = b->width, h = b->height;
+
+    /* Rule 1: Trivial Safe — find a revealed cell where
+       number == adjacent flags → reveal remaining neighbors */
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            Cell *c = board_cell(b, x, y);
+            if (!(c->flags & CELL_REVEALED) || c->number == 0) continue;
+
+            int adj_flags = board_count_adjacent_flags(b, x, y);
+            int adj_unrev = board_count_adjacent_unrevealed(b, x, y);
+            if (adj_unrev == 0) continue;
+
+            int remaining = c->number - adj_flags;
+
+            if (remaining == 0) {
+                /* All mines accounted for — reveal an unrevealed neighbor */
+                for (int d = 0; d < 8; d++) {
+                    int nx, ny;
+                    if (!board_get_neighbor(b, x, y, d, &nx, &ny)) continue;
+                    Cell *nc = board_cell(b, nx, ny);
+                    if (!(nc->flags & CELL_REVEALED) && !(nc->flags & CELL_FLAGGED)) {
+                        /* Reveal this cell */
+                        board_reveal(b, nx, ny);
+                        out->action = 0;
+                        out->x = nx;
+                        out->y = ny;
+                        out->reason_x = x;
+                        out->reason_y = y;
+                        return 1;
+                    }
+                }
+            }
+
+            /* Rule 2: Trivial Mine — remaining == unrevealed → flag one */
+            if (remaining == adj_unrev) {
+                for (int d = 0; d < 8; d++) {
+                    int nx, ny;
+                    if (!board_get_neighbor(b, x, y, d, &nx, &ny)) continue;
+                    Cell *nc = board_cell(b, nx, ny);
+                    if (!(nc->flags & CELL_REVEALED) && !(nc->flags & CELL_FLAGGED)) {
+                        nc->flags |= CELL_FLAGGED;
+                        b->flagged_count++;
+                        out->action = 1;
+                        out->x = nx;
+                        out->y = ny;
+                        out->reason_x = x;
+                        out->reason_y = y;
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /* No trivial action found */
+    out->action = -1;
+    out->x = out->y = -1;
+    out->reason_x = out->reason_y = -1;
+    return 0;
+}

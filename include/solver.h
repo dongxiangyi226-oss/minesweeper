@@ -31,4 +31,15 @@ int solver_get_hint(Board *b, int *hx, int *hy);
    Revealed cells get -1.0, flagged cells get 1.0. */
 void solver_compute_probabilities(Board *b, double *prob_map);
 
+/* ---- Step-by-step Solver (for auto-play visualization) ---- */
+typedef struct {
+    int action;         /* 0 = reveal, 1 = flag */
+    int x, y;           /* target cell */
+    int reason_x, reason_y;  /* the number cell that triggered deduction */
+} SolverAction;
+
+/* Execute one solver step on the board (modifies board directly).
+   Returns 1 if action found and applied, 0 if stuck. */
+int solver_step(Board *b, SolverAction *out);
+
 #endif /* SOLVER_H */

@@ -15,9 +15,18 @@
 #define IDM_FOG             2004
 #define IDM_REPLAY_SAVE     2005
 #define IDM_REPLAY_LOAD     2006
+#define IDM_AUTOPLAY        2007
+#define IDM_REPLAY_PLAY     2008
+#define IDM_TOROIDAL        2009
 
 #define IDM_STATS           3001
 #define IDM_ABOUT           3002
+
+/* ---- Theme menu IDs ---- */
+#define IDM_THEME_CLASSIC   4001
+#define IDM_THEME_DARK      4002
+#define IDM_THEME_OCEAN     4003
+#define IDM_THEME_RETRO     4004
 
 /* ---- Multiplayer menu IDs ---- */
 #define IDM_NET_HOST        5001
@@ -29,6 +38,9 @@
 #define TIMER_REPLAY        2
 #define TIMER_NET_POLL      3
 #define TIMER_NET_ACCEPT    4
+#define TIMER_ANIM          5
+#define TIMER_CURSOR        6
+#define TIMER_AUTOPLAY      7
 
 /* ---- Custom dialog IDs ---- */
 #define IDD_CUSTOM          4001

@@ -38,6 +38,7 @@ typedef struct {
     int flagged_count;
     GameState state;
     int first_click;        /* 1 if first click not yet done */
+    int toroidal;           /* 1 = edges wrap around (donut topology) */
 } Board;
 
 /* ---- API ---- */
@@ -82,5 +83,17 @@ int    board_count_adjacent_unrevealed(Board *b, int x, int y);
 /* Direction offsets for 8 neighbors */
 extern const int DX[8];
 extern const int DY[8];
+
+/* Get neighbor coordinates, respecting toroidal mode.
+   Returns 1 if valid neighbor, fills *nx, *ny. */
+int board_get_neighbor(Board *b, int x, int y, int dir, int *nx, int *ny);
+
+/* Collect cells that WOULD be revealed by clicking (x,y), in BFS order.
+   Does NOT modify the board. out_cells must be pre-allocated [w*h].
+   Returns -1 if mine hit (reveals the mine cell), otherwise count. */
+int board_reveal_collect(Board *b, int x, int y, int *out_cells, int *out_count);
+
+/* Reveal a single cell by flat index (no BFS, no win check). */
+void board_reveal_single(Board *b, int flat_idx);
 
 #endif /* BOARD_H */

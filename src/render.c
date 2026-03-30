@@ -6,6 +6,8 @@
  *
  * All text is wide-character (wchar_t / L"...") for Unicode/Chinese support.
  * Uses W-suffix Win32 APIs throughout.
+ *
+ * Supports 4 colour themes selectable at runtime.
  */
 
 #include "render.h"
@@ -14,39 +16,60 @@
 #include <math.h>
 
 /* ------------------------------------------------------------------ */
-/*  Colour constants                                                   */
+/*  Theme definitions (4 built-in themes)                              */
 /* ------------------------------------------------------------------ */
-#define CLR_FACE_BG     RGB(192, 192, 192)   /* classic Win gray      */
-#define CLR_CELL_BG     RGB(192, 192, 192)   /* unrevealed fill       */
-#define CLR_CELL_REV    RGB(200, 200, 200)   /* revealed fill         */
-#define CLR_WHITE       RGB(255, 255, 255)
-#define CLR_LTGRAY      RGB(223, 223, 223)
-#define CLR_DKGRAY      RGB(128, 128, 128)
-#define CLR_BLACK       RGB(0,   0,   0)
-#define CLR_RED         RGB(255, 0,   0)
-#define CLR_LED_BG      RGB(16,  16,  16)
-#define CLR_LED_FG      RGB(255, 0,   0)
-#define CLR_TOOLBAR_BG  RGB(212, 208, 200)   /* XP-ish toolbar gray   */
-#define CLR_FOG         RGB(32,  32,  32)
-#define CLR_EXPLODE_BG  RGB(255, 0,   0)
-#define CLR_BORDER_LT   RGB(255, 255, 255)   /* sunken frame light    */
-#define CLR_BORDER_DK   RGB(128, 128, 128)   /* sunken frame dark     */
-#define CLR_BORDER_BLK  RGB(64,  64,  64)    /* outer shadow          */
-
-/* ------------------------------------------------------------------ */
-/*  Number colours  (index 1..8)                                       */
-/* ------------------------------------------------------------------ */
-static const COLORREF NUM_COLORS[9] = {
-    RGB(0,   0,   0),      /* 0 - unused */
-    RGB(0,   0,   255),    /* 1 - blue */
-    RGB(0,   128, 0),      /* 2 - green */
-    RGB(255, 0,   0),      /* 3 - red */
-    RGB(0,   0,   128),    /* 4 - dark blue */
-    RGB(128, 0,   0),      /* 5 - dark red */
-    RGB(0,   128, 128),    /* 6 - teal */
-    RGB(0,   0,   0),      /* 7 - black */
-    RGB(128, 128, 128)     /* 8 - gray */
+static const ColorTheme THEMES[4] = {
+    { /* Classic (Windows 7 gray) */
+        RGB(192,192,192), RGB(192,192,192), RGB(200,200,200), RGB(180,180,180),
+        RGB(255,255,255), RGB(224,224,224), RGB(128,128,128), RGB(64,64,64),
+        RGB(16,16,16), RGB(255,0,0),
+        RGB(192,192,192), RGB(185,185,185),
+        RGB(32,32,32), RGB(255,0,0), RGB(0,0,0), RGB(255,0,0), RGB(255,200,0),
+        { 0, RGB(0,0,255), RGB(0,128,0), RGB(255,0,0), RGB(0,0,128),
+          RGB(128,0,0), RGB(0,128,128), RGB(0,0,0), RGB(128,128,128) }
+    },
+    { /* Dark Mode */
+        RGB(40,40,45), RGB(55,55,60), RGB(70,70,75), RGB(45,45,50),
+        RGB(90,90,95), RGB(75,75,80), RGB(30,30,35), RGB(15,15,20),
+        RGB(10,10,12), RGB(0,200,255),
+        RGB(50,50,55), RGB(40,40,45),
+        RGB(20,20,22), RGB(180,30,30), RGB(200,200,200), RGB(255,60,60), RGB(0,200,255),
+        { 0, RGB(80,140,255), RGB(80,200,80), RGB(255,80,80), RGB(100,100,255),
+          RGB(200,80,80), RGB(80,200,200), RGB(200,200,200), RGB(140,140,140) }
+    },
+    { /* Ocean */
+        RGB(180,210,230), RGB(160,195,220), RGB(190,220,240), RGB(140,175,200),
+        RGB(230,240,250), RGB(200,225,240), RGB(100,140,170), RGB(50,80,110),
+        RGB(20,40,60), RGB(0,255,200),
+        RGB(150,190,215), RGB(130,170,195),
+        RGB(30,50,70), RGB(255,80,80), RGB(30,60,90), RGB(255,100,100), RGB(255,220,50),
+        { 0, RGB(0,60,200), RGB(0,150,80), RGB(220,50,50), RGB(0,40,160),
+          RGB(160,40,40), RGB(0,140,140), RGB(30,30,30), RGB(100,130,160) }
+    },
+    { /* Retro Pixel */
+        RGB(200,180,140), RGB(180,160,120), RGB(210,195,165), RGB(160,140,100),
+        RGB(240,230,200), RGB(220,210,180), RGB(120,100,70), RGB(60,50,30),
+        RGB(30,20,10), RGB(255,180,0),
+        RGB(170,150,110), RGB(150,130,90),
+        RGB(40,30,20), RGB(255,50,0), RGB(40,30,20), RGB(255,50,0), RGB(255,255,0),
+        { 0, RGB(0,0,200), RGB(0,150,0), RGB(200,0,0), RGB(0,0,120),
+          RGB(150,0,0), RGB(0,120,120), RGB(0,0,0), RGB(100,80,60) }
+    },
 };
+static int g_theme = 0;
+
+/* ================================================================== */
+/*  Theme accessor functions                                           */
+/* ================================================================== */
+void render_set_theme(Renderer *r, int index) {
+    if (index >= 0 && index < THEME_COUNT) {
+        r->theme_index = index;
+        g_theme = index;
+    }
+}
+const ColorTheme *render_get_theme(Renderer *r) {
+    return &THEMES[r->theme_index];
+}
 
 /* ================================================================== */
 /*  Helper: draw a sunken frame (Win classic inset border)             */
@@ -55,10 +78,10 @@ static const COLORREF NUM_COLORS[9] = {
 /* ================================================================== */
 static void draw_sunken_frame(HDC hdc, int x, int y, int w, int h)
 {
-    HPEN penDk   = CreatePen(PS_SOLID, 1, CLR_DKGRAY);
-    HPEN penBlk  = CreatePen(PS_SOLID, 1, CLR_BORDER_BLK);
-    HPEN penWh   = CreatePen(PS_SOLID, 1, CLR_WHITE);
-    HPEN penLt   = CreatePen(PS_SOLID, 1, CLR_LTGRAY);
+    HPEN penDk   = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
+    HPEN penBlk  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_black);
+    HPEN penWh   = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
+    HPEN penLt   = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_ltgray);
     HPEN oldPen;
 
     /* Outer top-left: dark gray */
@@ -96,10 +119,10 @@ static void draw_sunken_frame(HDC hdc, int x, int y, int w, int h)
 /* ================================================================== */
 static void draw_raised_frame(HDC hdc, int x, int y, int w, int h)
 {
-    HPEN penWh  = CreatePen(PS_SOLID, 1, CLR_WHITE);
-    HPEN penLt  = CreatePen(PS_SOLID, 1, CLR_LTGRAY);
-    HPEN penDk  = CreatePen(PS_SOLID, 1, CLR_DKGRAY);
-    HPEN penBlk = CreatePen(PS_SOLID, 1, CLR_BLACK);
+    HPEN penWh  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
+    HPEN penLt  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_ltgray);
+    HPEN penDk  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
+    HPEN penBlk = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_black);
     HPEN oldPen;
 
     /* Outer white highlight (top-left) */
@@ -148,12 +171,12 @@ static void fill_rect_color(HDC hdc, int x, int y, int w, int h, COLORREF clr)
 /* ================================================================== */
 static void draw_cell_raised(HDC hdc, int x, int y, int sz)
 {
-    HPEN penWh  = CreatePen(PS_SOLID, 1, CLR_WHITE);
-    HPEN penDk  = CreatePen(PS_SOLID, 1, CLR_DKGRAY);
+    HPEN penWh  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
+    HPEN penDk  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
     HPEN oldPen;
 
     /* Fill with standard gray */
-    fill_rect_color(hdc, x, y, sz, sz, CLR_CELL_BG);
+    fill_rect_color(hdc, x, y, sz, sz, THEMES[g_theme].cell_raised);
 
     /* 2px white highlight on top and left edges */
     oldPen = (HPEN)SelectObject(hdc, penWh);
@@ -183,10 +206,10 @@ static void draw_cell_raised(HDC hdc, int x, int y, int sz)
 static void draw_cell_pressed(HDC hdc, int x, int y, int sz)
 {
     /* Fill slightly darker to indicate press */
-    fill_rect_color(hdc, x, y, sz, sz, CLR_CELL_REV);
+    fill_rect_color(hdc, x, y, sz, sz, THEMES[g_theme].cell_pressed);
 
     /* 1px dark border on top-left, giving a sunken look */
-    HPEN penDk = CreatePen(PS_SOLID, 1, CLR_DKGRAY);
+    HPEN penDk = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
     HPEN oldPen = (HPEN)SelectObject(hdc, penDk);
     MoveToEx(hdc, x, y + sz - 1, NULL);
     LineTo(hdc, x, y);
@@ -204,8 +227,16 @@ static void draw_cell_revealed(HDC hdc, int x, int y, int sz, COLORREF bg)
 {
     fill_rect_color(hdc, x, y, sz, sz, bg);
 
-    /* Very subtle 1px border (slightly darker than fill) */
-    HPEN pen = CreatePen(PS_SOLID, 1, RGB(175, 175, 175));
+    /* Very subtle 1px border (slightly darker than fill) --
+       use a blend between border_dkgray and border_ltgray */
+    COLORREF border_clr = THEMES[g_theme].border_dkgray;
+    /* For classic theme, use the original subtle gray */
+    int r_val = (int)(GetRValue(THEMES[g_theme].cell_revealed) * 0.875);
+    int g_val = (int)(GetGValue(THEMES[g_theme].cell_revealed) * 0.875);
+    int b_val = (int)(GetBValue(THEMES[g_theme].cell_revealed) * 0.875);
+    border_clr = RGB(r_val, g_val, b_val);
+
+    HPEN pen = CreatePen(PS_SOLID, 1, border_clr);
     HPEN oldPen = (HPEN)SelectObject(hdc, pen);
     HBRUSH oldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
     Rectangle(hdc, x, y, x + sz, y + sz);
@@ -224,7 +255,7 @@ static void draw_flag(HDC hdc, int cx, int cy, int sz)
     int bot = cy + sz - 5;
 
     /* Flag pole */
-    HPEN polePen = CreatePen(PS_SOLID, 2, CLR_BLACK);
+    HPEN polePen = CreatePen(PS_SOLID, 2, THEMES[g_theme].mine_color);
     HPEN oldPen = (HPEN)SelectObject(hdc, polePen);
     MoveToEx(hdc, mx, top, NULL);
     LineTo(hdc, mx, bot);
@@ -232,7 +263,7 @@ static void draw_flag(HDC hdc, int cx, int cy, int sz)
     DeleteObject(polePen);
 
     /* Base line */
-    HPEN basePen = CreatePen(PS_SOLID, 2, CLR_BLACK);
+    HPEN basePen = CreatePen(PS_SOLID, 2, THEMES[g_theme].mine_color);
     oldPen = (HPEN)SelectObject(hdc, basePen);
     MoveToEx(hdc, mx - 5, bot, NULL);
     LineTo(hdc, mx + 6, bot);
@@ -243,9 +274,14 @@ static void draw_flag(HDC hdc, int cx, int cy, int sz)
     DeleteObject(basePen);
 
     /* Red triangle flag */
-    HBRUSH redBr = CreateSolidBrush(CLR_RED);
+    HBRUSH redBr = CreateSolidBrush(THEMES[g_theme].flag_color);
     HBRUSH oldBr = (HBRUSH)SelectObject(hdc, redBr);
-    HPEN flagPen = CreatePen(PS_SOLID, 1, RGB(200, 0, 0));
+    COLORREF flag_outline = THEMES[g_theme].flag_color;
+    /* Slightly darker outline */
+    int fr = GetRValue(flag_outline); if (fr > 55) fr -= 55; else fr = 0;
+    int fg = GetGValue(flag_outline); if (fg > 55) fg -= 55; else fg = 0;
+    int fb = GetBValue(flag_outline); if (fb > 55) fb -= 55; else fb = 0;
+    HPEN flagPen = CreatePen(PS_SOLID, 1, RGB(fr, fg, fb));
     oldPen = (HPEN)SelectObject(hdc, flagPen);
     POINT pts[3];
     pts[0].x = mx;       pts[0].y = top;
@@ -268,7 +304,7 @@ static void draw_mine(HDC hdc, int cx, int cy, int sz)
     int rad  = sz / 2 - 5;
 
     /* Spikes (cross lines) */
-    HPEN spkPen = CreatePen(PS_SOLID, 2, CLR_BLACK);
+    HPEN spkPen = CreatePen(PS_SOLID, 2, THEMES[g_theme].mine_color);
     HPEN oldPen = (HPEN)SelectObject(hdc, spkPen);
     /* Vertical */
     MoveToEx(hdc, midx, midy - rad - 2, NULL);
@@ -286,8 +322,8 @@ static void draw_mine(HDC hdc, int cx, int cy, int sz)
     DeleteObject(spkPen);
 
     /* Main body (filled circle) */
-    HBRUSH br = CreateSolidBrush(CLR_BLACK);
-    HPEN   pen = CreatePen(PS_SOLID, 1, CLR_BLACK);
+    HBRUSH br = CreateSolidBrush(THEMES[g_theme].mine_color);
+    HPEN   pen = CreatePen(PS_SOLID, 1, THEMES[g_theme].mine_color);
     HBRUSH oldBr = (HBRUSH)SelectObject(hdc, br);
     oldPen = (HPEN)SelectObject(hdc, pen);
     Ellipse(hdc, midx - rad, midy - rad, midx + rad, midy + rad);
@@ -297,8 +333,8 @@ static void draw_mine(HDC hdc, int cx, int cy, int sz)
     DeleteObject(pen);
 
     /* Specular highlight (small white dot in upper-left) */
-    HBRUSH wh = CreateSolidBrush(CLR_WHITE);
-    HPEN wpen = CreatePen(PS_SOLID, 1, CLR_WHITE);
+    HBRUSH wh = CreateSolidBrush(THEMES[g_theme].border_white);
+    HPEN wpen = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
     oldBr = (HBRUSH)SelectObject(hdc, wh);
     oldPen = (HPEN)SelectObject(hdc, wpen);
     int hlr = 2;
@@ -315,7 +351,7 @@ static void draw_mine(HDC hdc, int cx, int cy, int sz)
 /* ================================================================== */
 static void draw_x(HDC hdc, int cx, int cy, int sz)
 {
-    HPEN pen = CreatePen(PS_SOLID, 2, CLR_RED);
+    HPEN pen = CreatePen(PS_SOLID, 2, THEMES[g_theme].flag_color);
     HPEN oldPen = (HPEN)SelectObject(hdc, pen);
     int pad = 3;
     MoveToEx(hdc, cx + pad, cy + pad, NULL);
@@ -337,7 +373,7 @@ static void draw_led_display(HDC hdc, HFONT font, int x, int y, int w, int h,
 
     /* Fill interior with near-black */
     RECT inner = { x + 2, y + 2, x + w - 2, y + h - 2 };
-    HBRUSH brBlack = CreateSolidBrush(CLR_LED_BG);
+    HBRUSH brBlack = CreateSolidBrush(THEMES[g_theme].led_bg);
     FillRect(hdc, &inner, brBlack);
     DeleteObject(brBlack);
 
@@ -350,7 +386,7 @@ static void draw_led_display(HDC hdc, HFONT font, int x, int y, int w, int h,
 
     HFONT oldFont = (HFONT)SelectObject(hdc, font);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, CLR_LED_FG);
+    SetTextColor(hdc, THEMES[g_theme].led_fg);
     DrawTextW(hdc, buf, -1, &inner, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, oldFont);
 }
@@ -421,7 +457,7 @@ static void draw_face_button(HDC hdc, HFONT font, int x, int y, int w, int h,
                              const wchar_t *text, int pressed)
 {
     /* Fill background */
-    fill_rect_color(hdc, x, y, w, h, CLR_CELL_BG);
+    fill_rect_color(hdc, x, y, w, h, THEMES[g_theme].cell_raised);
 
     if (pressed) {
         /* Sunken look when pressed */
@@ -434,7 +470,7 @@ static void draw_face_button(HDC hdc, HFONT font, int x, int y, int w, int h,
     RECT trc = { x + (pressed ? 2 : 0), y + (pressed ? 2 : 0), x + w, y + h };
     HFONT oldFont = (HFONT)SelectObject(hdc, font);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, CLR_BLACK);
+    SetTextColor(hdc, THEMES[g_theme].mine_color);
     DrawTextW(hdc, text, -1, &trc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, oldFont);
 }
@@ -446,11 +482,11 @@ static void draw_toolbar_button(HDC hdc, HFONT font, int x, int y, int w, int h,
                                 const wchar_t *text, int active)
 {
     /* Fill with slightly different bg for toolbar */
-    fill_rect_color(hdc, x, y, w, h, active ? RGB(185, 185, 185) : CLR_TOOLBAR_BG);
+    fill_rect_color(hdc, x, y, w, h, active ? THEMES[g_theme].toolbar_active : THEMES[g_theme].toolbar_bg);
 
     /* 1px raised frame */
-    HPEN penWh  = CreatePen(PS_SOLID, 1, CLR_WHITE);
-    HPEN penDk  = CreatePen(PS_SOLID, 1, CLR_DKGRAY);
+    HPEN penWh  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
+    HPEN penDk  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
     HPEN oldPen;
 
     oldPen = (HPEN)SelectObject(hdc, penWh);
@@ -467,7 +503,8 @@ static void draw_toolbar_button(HDC hdc, HFONT font, int x, int y, int w, int h,
     DeleteObject(penDk);
 
     /* Separator line on right edge */
-    HPEN sepPen = CreatePen(PS_SOLID, 1, RGB(160, 160, 160));
+    COLORREF sep_clr = THEMES[g_theme].border_dkgray;
+    HPEN sepPen = CreatePen(PS_SOLID, 1, sep_clr);
     oldPen = (HPEN)SelectObject(hdc, sepPen);
     MoveToEx(hdc, x + w - 1, y + 3, NULL);
     LineTo(hdc, x + w - 1, y + h - 3);
@@ -477,7 +514,8 @@ static void draw_toolbar_button(HDC hdc, HFONT font, int x, int y, int w, int h,
     RECT trc = { x, y, x + w, y + h };
     HFONT oldFont = (HFONT)SelectObject(hdc, font);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, active ? RGB(0, 0, 160) : CLR_BLACK);
+    /* Active text uses a highlight colour; inactive uses mine_color (dark text) */
+    SetTextColor(hdc, active ? THEMES[g_theme].num_colors[4] : THEMES[g_theme].mine_color);
     DrawTextW(hdc, text, -1, &trc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, oldFont);
 }
@@ -490,6 +528,8 @@ Renderer *render_create(HWND hwnd, int w, int h)
 {
     Renderer *r = (Renderer *)calloc(1, sizeof(Renderer));
     if (!r) return NULL;
+
+    r->theme_index = 0;
 
     HDC screen_dc = GetDC(hwnd);
     r->mem_dc  = CreateCompatibleDC(screen_dc);
@@ -570,9 +610,9 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
     int client_w = r->buf_w;
 
     /* ============================================================== */
-    /*  1. Fill entire background with classic Win gray                */
+    /*  1. Fill entire background with theme bg                       */
     /* ============================================================== */
-    fill_rect_color(hdc, 0, 0, r->buf_w, r->buf_h, CLR_FACE_BG);
+    fill_rect_color(hdc, 0, 0, r->buf_w, r->buf_h, THEMES[g_theme].bg);
 
     /* ============================================================== */
     /*  2. Sunken frame around header area                             */
@@ -638,8 +678,8 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
     for (int cy = 0; cy < bh; cy++) {
         for (int cx = 0; cx < bw; cx++) {
             Cell *c     = board_cell(b, cx, cy);
-            int   px    = gx + cx * CELL_SIZE;
-            int   py    = gy + cy * CELL_SIZE;
+            int   cell_x = gx + cx * CELL_SIZE;
+            int   cell_y = gy + cy * CELL_SIZE;
             int   is_rev  = (c->flags & CELL_REVEALED);
             int   is_mine = (c->flags & CELL_MINE);
             int   is_flag = (c->flags & CELL_FLAGGED);
@@ -648,7 +688,8 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
             /* --- Fog of war check --- */
             if (g->fog_mode && !is_rev) {
                 if (!is_visible_in_fog(b, cx, cy, g->fog_radius)) {
-                    fill_rect_color(hdc, px, py, CELL_SIZE, CELL_SIZE, CLR_FOG);
+                    fill_rect_color(hdc, cell_x, cell_y, CELL_SIZE, CELL_SIZE,
+                                    THEMES[g_theme].fog_color);
                     continue;
                 }
             }
@@ -667,29 +708,34 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                 if (is_mine && b->state == STATE_LOST &&
                     cx == g->explode_x && cy == g->explode_y) {
                     /* RED background for the mine the player clicked */
-                    draw_cell_revealed(hdc, px, py, CELL_SIZE, CLR_EXPLODE_BG);
-                    draw_mine(hdc, px, py, CELL_SIZE);
+                    draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
+                                       THEMES[g_theme].explode_bg);
+                    draw_mine(hdc, cell_x, cell_y, CELL_SIZE);
                 }
                 else if (is_mine) {
                     /* Other revealed mines on loss: gray bg + mine */
-                    draw_cell_revealed(hdc, px, py, CELL_SIZE, CLR_CELL_REV);
-                    draw_mine(hdc, px, py, CELL_SIZE);
+                    draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
+                                       THEMES[g_theme].cell_revealed);
+                    draw_mine(hdc, cell_x, cell_y, CELL_SIZE);
                 }
                 else if (c->number > 0 && c->number <= 8) {
                     /* Numbered cell */
-                    draw_cell_revealed(hdc, px, py, CELL_SIZE, CLR_CELL_REV);
+                    draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
+                                       THEMES[g_theme].cell_revealed);
                     wchar_t num_str[2] = { L'0' + c->number, L'\0' };
-                    RECT nrc = { px, py, px + CELL_SIZE, py + CELL_SIZE };
+                    RECT nrc = { cell_x, cell_y,
+                                 cell_x + CELL_SIZE, cell_y + CELL_SIZE };
                     HFONT oldFont = (HFONT)SelectObject(hdc, r->font_num);
                     SetBkMode(hdc, TRANSPARENT);
-                    SetTextColor(hdc, NUM_COLORS[c->number]);
+                    SetTextColor(hdc, THEMES[g_theme].num_colors[c->number]);
                     DrawTextW(hdc, num_str, 1, &nrc,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(hdc, oldFont);
                 }
                 else {
                     /* Empty revealed cell (number == 0) */
-                    draw_cell_revealed(hdc, px, py, CELL_SIZE, CLR_CELL_REV);
+                    draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
+                                       THEMES[g_theme].cell_revealed);
                 }
             }
             else {
@@ -699,32 +745,34 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                 if (b->state == STATE_LOST) {
                     if (is_flag && !is_mine) {
                         /* Wrong flag: raised cell + flag + red X */
-                        draw_cell_raised(hdc, px, py, CELL_SIZE);
-                        draw_flag(hdc, px, py, CELL_SIZE);
-                        draw_x(hdc, px, py, CELL_SIZE);
+                        draw_cell_raised(hdc, cell_x, cell_y, CELL_SIZE);
+                        draw_flag(hdc, cell_x, cell_y, CELL_SIZE);
+                        draw_x(hdc, cell_x, cell_y, CELL_SIZE);
                         goto next_cell;
                     }
                     if (is_mine && !is_flag) {
                         /* Unrevealed mine on loss: show it flat */
-                        draw_cell_revealed(hdc, px, py, CELL_SIZE, CLR_CELL_REV);
-                        draw_mine(hdc, px, py, CELL_SIZE);
+                        draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
+                                           THEMES[g_theme].cell_revealed);
+                        draw_mine(hdc, cell_x, cell_y, CELL_SIZE);
                         goto next_cell;
                     }
                 }
 
                 if (chord_pressed) {
                     /* Chord press: draw as pressed/sunken */
-                    draw_cell_pressed(hdc, px, py, CELL_SIZE);
+                    draw_cell_pressed(hdc, cell_x, cell_y, CELL_SIZE);
                 }
                 else if (is_flag) {
                     /* Flagged cell */
-                    draw_cell_raised(hdc, px, py, CELL_SIZE);
-                    draw_flag(hdc, px, py, CELL_SIZE);
+                    draw_cell_raised(hdc, cell_x, cell_y, CELL_SIZE);
+                    draw_flag(hdc, cell_x, cell_y, CELL_SIZE);
                 }
                 else if (is_q) {
                     /* Question mark cell */
-                    draw_cell_raised(hdc, px, py, CELL_SIZE);
-                    RECT qrc = { px, py, px + CELL_SIZE, py + CELL_SIZE };
+                    draw_cell_raised(hdc, cell_x, cell_y, CELL_SIZE);
+                    RECT qrc = { cell_x, cell_y,
+                                 cell_x + CELL_SIZE, cell_y + CELL_SIZE };
                     HFONT oldFont = (HFONT)SelectObject(hdc, r->font_num);
                     SetBkMode(hdc, TRANSPARENT);
                     SetTextColor(hdc, RGB(128, 0, 128));
@@ -734,7 +782,7 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                 }
                 else {
                     /* Plain unrevealed */
-                    draw_cell_raised(hdc, px, py, CELL_SIZE);
+                    draw_cell_raised(hdc, cell_x, cell_y, CELL_SIZE);
                 }
 
                 /* --- Heat map overlay --- */
@@ -744,8 +792,9 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                         COLORREF hc = heatmap_color(prob);
                         HBRUSH brHeat = CreateSolidBrush(hc);
                         int pad = 4;
-                        RECT hrc = { px + pad, py + pad,
-                                     px + CELL_SIZE - pad, py + CELL_SIZE - pad };
+                        RECT hrc = { cell_x + pad, cell_y + pad,
+                                     cell_x + CELL_SIZE - pad,
+                                     cell_y + CELL_SIZE - pad };
                         FillRect(hdc, &hrc, brHeat);
                         DeleteObject(brHeat);
 
@@ -762,8 +811,9 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                             DEFAULT_PITCH | FF_SWISS, L"Consolas");
                         HFONT oldFont = (HFONT)SelectObject(hdc, smallFont);
                         SetBkMode(hdc, TRANSPARENT);
-                        SetTextColor(hdc, CLR_BLACK);
-                        RECT trc = { px, py + 2, px + CELL_SIZE, py + CELL_SIZE };
+                        SetTextColor(hdc, THEMES[g_theme].mine_color);
+                        RECT trc = { cell_x, cell_y + 2,
+                                     cell_x + CELL_SIZE, cell_y + CELL_SIZE };
                         DrawTextW(hdc, prob_str, -1, &trc,
                                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                         SelectObject(hdc, oldFont);
@@ -777,10 +827,36 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                 HPEN greenPen = CreatePen(PS_SOLID, 3, RGB(0, 255, 0));
                 HPEN oldPen = (HPEN)SelectObject(hdc, greenPen);
                 HBRUSH oldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                Rectangle(hdc, px + 1, py + 1, px + CELL_SIZE - 1, py + CELL_SIZE - 1);
+                Rectangle(hdc, cell_x + 1, cell_y + 1,
+                          cell_x + CELL_SIZE - 1, cell_y + CELL_SIZE - 1);
                 SelectObject(hdc, oldPen);
                 SelectObject(hdc, oldBr);
                 DeleteObject(greenPen);
+            }
+
+            /* --- Cursor highlight (pulsing border) --- */
+            if (g->cursor_visible && cx == g->cursor_x && cy == g->cursor_y) {
+                int pen_w = (g->cursor_blink % 6 < 3) ? 3 : 2;
+                HPEN cp = CreatePen(PS_SOLID, pen_w, THEMES[g_theme].cursor_color);
+                HPEN old_p = (HPEN)SelectObject(hdc, cp);
+                HBRUSH old_b = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, cell_x + 1, cell_y + 1,
+                          cell_x + CELL_SIZE - 1, cell_y + CELL_SIZE - 1);
+                SelectObject(hdc, old_b);
+                SelectObject(hdc, old_p);
+                DeleteObject(cp);
+            }
+
+            /* --- Autoplay highlight (blue border) --- */
+            if (g->autoplay_active && cx == g->autoplay_hl_x && cy == g->autoplay_hl_y) {
+                HPEN ap = CreatePen(PS_SOLID, 3, RGB(0, 120, 255));
+                HPEN old_p = (HPEN)SelectObject(hdc, ap);
+                HBRUSH old_b = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, cell_x + 1, cell_y + 1,
+                          cell_x + CELL_SIZE - 1, cell_y + CELL_SIZE - 1);
+                SelectObject(hdc, old_b);
+                SelectObject(hdc, old_p);
+                DeleteObject(ap);
             }
 
             next_cell:;
@@ -813,8 +889,8 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
         fill_rect_color(hdc, bar_x, bar_y, fill_w, bar_h, RGB(0, 200, 80));
 
         /* Tiny sunken border */
-        HPEN penDk = CreatePen(PS_SOLID, 1, CLR_DKGRAY);
-        HPEN penWh = CreatePen(PS_SOLID, 1, CLR_WHITE);
+        HPEN penDk = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
+        HPEN penWh = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
         HPEN oldPen;
         oldPen = (HPEN)SelectObject(hdc, penDk);
         MoveToEx(hdc, bar_x - 1, bar_y + bar_h, NULL);

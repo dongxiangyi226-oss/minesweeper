@@ -5,7 +5,9 @@
  * All Win32 APIs use W-suffix variants.
  * No .rc resource files; everything is created in code.
  *
- * Features: login/register, chord press visual feedback, online multiplayer.
+ * Features: login/register, chord press visual feedback, online multiplayer,
+ *           keyboard cursor, Konami code, heatmap peek, toroidal mode,
+ *           themes, animation, AI autoplay.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -57,6 +59,13 @@ static NetState *g_net = NULL;
 /* Chord press (both-button) tracking */
 static int g_lmb_down = 0;
 static int g_rmb_down = 0;
+
+/* Konami Code sequence: Up Up Down Down Left Right Left Right B A */
+static int g_konami_seq[] = {VK_UP,VK_UP,VK_DOWN,VK_DOWN,VK_LEFT,VK_RIGHT,VK_LEFT,VK_RIGHT,'B','A'};
+static int g_konami_index = 0;
+
+/* Alt-key heatmap peek */
+static int g_alt_heatmap = 0;  /* 1 = alt is held down for heatmap peek */
 
 static const wchar_t CLASS_NAME[] = L"MinesweeperClass";
 static const char    USERDB_FILE[] = "minesweeper_users.dat";
@@ -700,6 +709,7 @@ static HMENU create_menu(void)
     HMENU game  = CreatePopupMenu();
     HMENU func  = CreatePopupMenu();
     HMENU net   = CreatePopupMenu();
+    HMENU theme = CreatePopupMenu();
     HMENU help  = CreatePopupMenu();
 
     /* --- Game menu (游戏) --- */
@@ -725,6 +735,9 @@ static HMENU create_menu(void)
     AppendMenuW(func, MF_SEPARATOR, 0, NULL);
     AppendMenuW(func, MF_STRING,    IDM_REPLAY_SAVE,    L"\x4FDD\x5B58\x56DE\x653E(&S)");  /* 保存回放 */
     AppendMenuW(func, MF_STRING,    IDM_REPLAY_LOAD,    L"\x52A0\x8F7D\x56DE\x653E(&L)");  /* 加载回放 */
+    AppendMenuW(func, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(func, MF_STRING,    IDM_TOROIDAL,       L"\x73AF\x9762\x6A21\x5F0F(&T)");  /* 环面模式 */
+    AppendMenuW(func, MF_STRING,    IDM_AUTOPLAY,       L"AI\x81EA\x52A8\x6F14\x793A(&A)"); /* AI自动演示 */
 
     /* No-guess mode defaults to checked (game_create sets it to 1) */
     CheckMenuItem(func, IDM_NO_GUESS, MF_BYCOMMAND | MF_CHECKED);
@@ -741,15 +754,26 @@ static HMENU create_menu(void)
     /* Disconnect disabled by default */
     EnableMenuItem(net, IDM_NET_DISCONNECT, MF_BYCOMMAND | MF_GRAYED);
 
+    /* --- Theme menu (主题) --- */
+    AppendMenuW(theme, MF_STRING,   IDM_THEME_CLASSIC,  L"\x7ECF\x5178(&C)");  /* 经典 */
+    AppendMenuW(theme, MF_STRING,   IDM_THEME_DARK,     L"\x6697\x9ED1(&D)");  /* 暗黑 */
+    AppendMenuW(theme, MF_STRING,   IDM_THEME_OCEAN,    L"\x6D77\x6D0B(&O)");  /* 海洋 */
+    AppendMenuW(theme, MF_STRING,   IDM_THEME_RETRO,    L"\x590D\x53E4(&R)");  /* 复古 */
+
+    /* Default theme = classic */
+    CheckMenuRadioItem(theme, IDM_THEME_CLASSIC, IDM_THEME_RETRO,
+                       IDM_THEME_CLASSIC, MF_BYCOMMAND);
+
     /* --- Help menu (帮助) --- */
     AppendMenuW(help, MF_STRING,    IDM_STATS,          L"\x7EDF\x8BA1(&S)");          /* 统计 */
     AppendMenuW(help, MF_STRING,    IDM_ABOUT,          L"\x5173\x4E8E(&A)");          /* 关于 */
 
     /* --- Assemble menu bar --- */
-    AppendMenuW(bar, MF_POPUP, (UINT_PTR)game, L"\x6E38\x620F(&G)");  /* 游戏 */
-    AppendMenuW(bar, MF_POPUP, (UINT_PTR)func, L"\x529F\x80FD(&F)");  /* 功能 */
-    AppendMenuW(bar, MF_POPUP, (UINT_PTR)net,  L"\x8054\x673A(&M)");  /* 联机 */
-    AppendMenuW(bar, MF_POPUP, (UINT_PTR)help, L"\x5E2E\x52A9(&H)");  /* 帮助 */
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)game,  L"\x6E38\x620F(&G)");  /* 游戏 */
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)func,  L"\x529F\x80FD(&F)");  /* 功能 */
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)net,   L"\x8054\x673A(&M)");  /* 联机 */
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)theme, L"\x4E3B\x9898(&S)");  /* 主题 */
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)help,  L"\x5E2E\x52A9(&H)");  /* 帮助 */
 
     return bar;
 }
@@ -793,6 +817,20 @@ static void start_new_game(HWND hwnd, Difficulty diff)
     g_game->press_cx = -1;
     g_game->press_cy = -1;
 
+    /* Initialize new game fields */
+    g_game->cursor_x = 0;
+    g_game->cursor_y = 0;
+    g_game->cursor_visible = 0;
+    g_game->cursor_blink = 0;
+    g_game->anim_active = 0;
+    g_game->anim_cells = NULL;
+    g_game->anim_count = 0;
+    g_game->anim_index = 0;
+    g_game->autoplay_active = 0;
+    g_game->autoplay_hl_x = -1;
+    g_game->autoplay_hl_y = -1;
+    if (g_game->board) g_game->board->toroidal = g_game->toroidal_mode;
+
     resize_window(hwnd);
 
     /* Send board to peer if hosting and connected */
@@ -823,6 +861,20 @@ static void start_new_game_custom(HWND hwnd, int w, int h, int mines)
     g_game->press_active = 0;
     g_game->press_cx = -1;
     g_game->press_cy = -1;
+
+    /* Initialize new game fields */
+    g_game->cursor_x = 0;
+    g_game->cursor_y = 0;
+    g_game->cursor_visible = 0;
+    g_game->cursor_blink = 0;
+    g_game->anim_active = 0;
+    g_game->anim_cells = NULL;
+    g_game->anim_count = 0;
+    g_game->anim_index = 0;
+    g_game->autoplay_active = 0;
+    g_game->autoplay_hl_x = -1;
+    g_game->autoplay_hl_y = -1;
+    if (g_game->board) g_game->board->toroidal = g_game->toroidal_mode;
 
     resize_window(hwnd);
     update_difficulty_check(g_menu, DIFF_CUSTOM);
@@ -940,6 +992,18 @@ static void handle_game_end(HWND hwnd)
             net_send_game_end(g_net, 0);
             net_send_state(g_net, b->revealed_count, b->flagged_count, STATE_LOST);
         }
+
+        /* Window shake on loss */
+        {
+            RECT wr;
+            GetWindowRect(hwnd, &wr);
+            for (int i = 0; i < 6; i++) {
+                int off = (i % 2 == 0) ? 5 : -5;
+                SetWindowPos(hwnd, NULL, wr.left + off, wr.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                Sleep(40);
+            }
+            SetWindowPos(hwnd, NULL, wr.left, wr.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
     }
 
     InvalidateRect(hwnd, NULL, FALSE);
@@ -1009,7 +1073,11 @@ static void show_about_dialog(HWND hwnd)
         L"  N - \x65B0\x6E38\x620F\n"                      /* 新游戏 */
         L"  H - \x63D0\x793A\n"                             /* 提示 */
         L"  P - \x70ED\x529B\x56FE\n"                      /* 热力图 */
-        L"  F - \x6218\x4E89\x8FF7\x96FE\n",               /* 战争迷雾 */
+        L"  F - \x6218\x4E89\x8FF7\x96FE\n"               /* 战争迷雾 */
+        L"  \x2190\x2191\x2192\x2193 - \x952E\x76D8\x5149\x6807\n"  /* ←↑→↓ - 键盘光标 */
+        L"  Space - \x63ED\x5F00\n"                        /* 揭开 */
+        L"  D - \x53CC\x51FB\n"                            /* 双击 */
+        L"  Tab - \x667A\x80FD\x8DF3\x8F6C\n",            /* 智能跳转 */
         L"\x5173\x4E8E\x626B\x96F7",  /* 关于扫雷 */
         MB_OK | MB_ICONINFORMATION);
 }
@@ -1289,6 +1357,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_renderer = render_create(hwnd, cw, ch);
         ensure_prob_map(b->width, b->height);
         SetTimer(hwnd, TIMER_GAME, 1000, NULL);
+        SetTimer(hwnd, TIMER_CURSOR, 100, NULL);
         return 0;
     }
 
@@ -1308,6 +1377,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     /* ---- Left mouse button DOWN ---- */
     case WM_LBUTTONDOWN: {
+        /* Block input during animation */
+        if (g_game->anim_active) return 0;
+
+        /* Hide keyboard cursor on mouse click */
+        g_game->cursor_visible = 0;
+
         int px = LOWORD(lp);
         int py = HIWORD(lp);
         Board *b = g_game->board;
@@ -1372,7 +1447,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             /* --- KEY: Left-click on a revealed numbered cell ---
                Show surrounding cells as pressed (Windows 7 behaviour).
-               Don't reveal anything yet — just visual feedback.
+               Don't reveal anything yet -- just visual feedback.
                Actual chord happens only with both buttons. */
             if (c && (c->flags & CELL_REVEALED) && c->number > 0) {
                 g_game->press_active = 1;
@@ -1387,6 +1462,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             game_left_click(g_game, cx, cy);
             replay_record(g_replay, cx, cy, ACTION_LEFT);
             sound_click();
+
+            /* Check if animation was triggered */
+            if (g_game->anim_active) {
+                SetTimer(hwnd, TIMER_ANIM, 15, NULL);
+            }
 
             /* Send move to peer */
             if (g_net && g_net->connected) {
@@ -1423,6 +1503,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     /* ---- Right mouse button DOWN ---- */
     case WM_RBUTTONDOWN: {
+        /* Block input during animation */
+        if (g_game->anim_active) return 0;
+
         int px = LOWORD(lp);
         int py = HIWORD(lp);
         Board *b = g_game->board;
@@ -1469,6 +1552,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     /* ---- Middle mouse button (chord) ---- */
     case WM_MBUTTONDOWN: {
+        /* Block input during animation */
+        if (g_game->anim_active) return 0;
+
         int px = LOWORD(lp);
         int py = HIWORD(lp);
         Board *b = g_game->board;
@@ -1584,6 +1670,57 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 }
             }
         }
+        else if (wp == TIMER_ANIM) {
+            if (g_game->anim_active) {
+                Board *ab = g_game->board;
+                int batch = (g_game->anim_type == 2) ? 1 : 4; /* mines: 1 per tick, cascade: 4 */
+                for (int i = 0; i < batch && g_game->anim_index < g_game->anim_count; i++) {
+                    board_reveal_single(ab, g_game->anim_cells[g_game->anim_index]);
+                    g_game->anim_index++;
+                }
+                if (g_game->anim_index >= g_game->anim_count) {
+                    /* Animation complete */
+                    g_game->anim_active = 0;
+                    free(g_game->anim_cells);
+                    g_game->anim_cells = NULL;
+                    KillTimer(hwnd, TIMER_ANIM);
+                    if (g_game->anim_type == 0) { /* cascade: check win */
+                        if (board_check_win(ab)) handle_game_end(hwnd);
+                    }
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+        else if (wp == TIMER_CURSOR) {
+            if (g_game->cursor_visible) {
+                g_game->cursor_blink++;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+        else if (wp == TIMER_AUTOPLAY) {
+            if (g_game->autoplay_active && g_game->board) {
+                SolverAction act;
+                if (solver_step(g_game->board, &act)) {
+                    g_game->autoplay_hl_x = act.reason_x;
+                    g_game->autoplay_hl_y = act.reason_y;
+                    if (board_check_win(g_game->board)) {
+                        g_game->autoplay_active = 0;
+                        KillTimer(hwnd, TIMER_AUTOPLAY);
+                        handle_game_end(hwnd);
+                    }
+                } else {
+                    /* Solver stuck */
+                    g_game->autoplay_active = 0;
+                    g_game->autoplay_hl_x = -1;
+                    g_game->autoplay_hl_y = -1;
+                    KillTimer(hwnd, TIMER_AUTOPLAY);
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
         return 0;
 
     /* ---- Menu commands ---- */
@@ -1654,6 +1791,40 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             do_replay_load(hwnd);
             break;
 
+        case IDM_TOROIDAL:
+            g_game->toroidal_mode = !g_game->toroidal_mode;
+            if (g_game->board) g_game->board->toroidal = g_game->toroidal_mode;
+            CheckMenuItem(g_menu, IDM_TOROIDAL,
+                g_game->toroidal_mode ? MF_CHECKED : MF_UNCHECKED);
+            /* Start new game with new mode */
+            start_new_game(hwnd, g_game->difficulty);
+            break;
+
+        case IDM_THEME_CLASSIC:
+        case IDM_THEME_DARK:
+        case IDM_THEME_OCEAN:
+        case IDM_THEME_RETRO: {
+            int idx = LOWORD(wp) - IDM_THEME_CLASSIC;
+            render_set_theme(g_renderer, idx);
+            CheckMenuRadioItem(g_menu, IDM_THEME_CLASSIC, IDM_THEME_RETRO,
+                LOWORD(wp), MF_BYCOMMAND);
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+        }
+
+        case IDM_AUTOPLAY:
+            if (g_game->board && g_game->board->state == STATE_PLAYING && !g_game->autoplay_active) {
+                g_game->autoplay_active = 1;
+                SetTimer(hwnd, TIMER_AUTOPLAY, 300, NULL);
+            } else if (g_game->autoplay_active) {
+                g_game->autoplay_active = 0;
+                g_game->autoplay_hl_x = -1;
+                g_game->autoplay_hl_y = -1;
+                KillTimer(hwnd, TIMER_AUTOPLAY);
+            }
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+
         case IDM_STATS:
             show_stats_dialog(hwnd);
             break;
@@ -1678,8 +1849,118 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     /* ---- Keyboard shortcuts ---- */
-    case WM_KEYDOWN:
-        switch (wp) {
+    case WM_KEYDOWN: {
+        Board *b = g_game->board;
+
+        /* ---- Konami Code detection ---- */
+        if ((int)wp == g_konami_seq[g_konami_index]) {
+            g_konami_index++;
+            if (g_konami_index == 10) {
+                /* Easter egg! Flag all mines */
+                g_konami_index = 0;
+                if (b && b->state == STATE_PLAYING) {
+                    sound_win();
+                    for (int i = 0; i < b->width * b->height; i++) {
+                        if ((b->cells[i].flags & CELL_MINE) && !(b->cells[i].flags & CELL_FLAGGED)) {
+                            b->cells[i].flags |= CELL_FLAGGED;
+                            b->flagged_count++;
+                        }
+                    }
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
+        } else {
+            g_konami_index = ((int)wp == g_konami_seq[0]) ? 1 : 0;
+        }
+
+        /* ---- Keyboard cursor navigation ---- */
+        if (b && (b->state == STATE_READY || b->state == STATE_PLAYING)) {
+            int handled = 1;
+            switch ((int)wp) {
+            case VK_LEFT:
+                g_game->cursor_visible = 1;
+                g_game->cursor_x = (g_game->cursor_x - 1 + b->width) % b->width;
+                break;
+            case VK_RIGHT:
+                g_game->cursor_visible = 1;
+                g_game->cursor_x = (g_game->cursor_x + 1) % b->width;
+                break;
+            case VK_UP:
+                g_game->cursor_visible = 1;
+                g_game->cursor_y = (g_game->cursor_y - 1 + b->height) % b->height;
+                break;
+            case VK_DOWN:
+                g_game->cursor_visible = 1;
+                g_game->cursor_y = (g_game->cursor_y + 1) % b->height;
+                break;
+            case VK_SPACE: case VK_RETURN:
+                if (g_game->cursor_visible && !g_game->anim_active) {
+                    game_left_click(g_game, g_game->cursor_x, g_game->cursor_y);
+                    replay_record(g_replay, g_game->cursor_x, g_game->cursor_y, ACTION_LEFT);
+                    sound_click();
+                    if (g_game->anim_active) {
+                        SetTimer(hwnd, TIMER_ANIM, 15, NULL);
+                    }
+                    if (g_net && g_net->connected) {
+                        net_send_move(g_net, g_game->cursor_x, g_game->cursor_y, ACTION_LEFT);
+                        net_send_state(g_net, b->revealed_count, b->flagged_count, b->state);
+                    }
+                    if (b->state == STATE_WON || b->state == STATE_LOST)
+                        handle_game_end(hwnd);
+                }
+                break;
+            case 'D':
+                if (g_game->cursor_visible && !g_game->anim_active) {
+                    game_chord_click(g_game, g_game->cursor_x, g_game->cursor_y);
+                    replay_record(g_replay, g_game->cursor_x, g_game->cursor_y, ACTION_CHORD);
+                    if (g_net && g_net->connected) {
+                        net_send_move(g_net, g_game->cursor_x, g_game->cursor_y, ACTION_CHORD);
+                        net_send_state(g_net, b->revealed_count, b->flagged_count, b->state);
+                    }
+                    if (b->state == STATE_WON || b->state == STATE_LOST)
+                        handle_game_end(hwnd);
+                }
+                break;
+            case VK_TAB:
+                /* Smart jump: find next unrevealed cell adjacent to a number */
+                if (g_game->cursor_visible && b) {
+                    int sx = g_game->cursor_x, sy = g_game->cursor_y;
+                    for (int i = 1; i < b->width * b->height; i++) {
+                        int idx = ((sy * b->width + sx) + i) % (b->width * b->height);
+                        int tx = idx % b->width, ty = idx / b->width;
+                        Cell *tc = board_cell(b, tx, ty);
+                        if (tc && !(tc->flags & CELL_REVEALED) && !(tc->flags & CELL_FLAGGED)) {
+                            /* Check if adjacent to a revealed number */
+                            int near_number = 0;
+                            for (int d = 0; d < 8; d++) {
+                                int nnx, nny;
+                                if (!board_get_neighbor(b, tx, ty, d, &nnx, &nny)) continue;
+                                Cell *nc = board_cell(b, nnx, nny);
+                                if (nc && (nc->flags & CELL_REVEALED) && nc->number > 0) {
+                                    near_number = 1; break;
+                                }
+                            }
+                            if (near_number) {
+                                g_game->cursor_x = tx;
+                                g_game->cursor_y = ty;
+                                break;
+                            }
+                        }
+                    }
+                }
+                break;
+            default:
+                handled = 0;
+                break;
+            }
+            if (handled) {
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+        }
+
+        /* ---- Existing keyboard shortcuts (N/H/P/F) ---- */
+        switch ((int)wp) {
         case 'N':
             start_new_game(hwnd, g_game->difficulty);
             break;
@@ -1696,14 +1977,54 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             InvalidateRect(hwnd, NULL, FALSE);
             break;
         case 'F':
-            game_toggle_fog(g_game);
-            CheckMenuItem(GetSubMenu(g_menu, 1), IDM_FOG,
-                MF_BYCOMMAND |
-                (g_game->fog_mode ? MF_CHECKED : MF_UNCHECKED));
-            InvalidateRect(hwnd, NULL, FALSE);
+            if (g_game->cursor_visible && b &&
+                (b->state == STATE_READY || b->state == STATE_PLAYING)) {
+                game_right_click(g_game, g_game->cursor_x, g_game->cursor_y);
+                sound_flag();
+                InvalidateRect(hwnd, NULL, FALSE);
+            } else {
+                game_toggle_fog(g_game);
+                CheckMenuItem(GetSubMenu(g_menu, 1), IDM_FOG,
+                    MF_BYCOMMAND |
+                    (g_game->fog_mode ? MF_CHECKED : MF_UNCHECKED));
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
             break;
         }
         return 0;
+    }
+
+    /* ---- Keyboard key up (Alt release) ---- */
+    case WM_KEYUP:
+        if (wp == VK_MENU && g_alt_heatmap) {
+            g_alt_heatmap = 0;
+            g_game->heatmap_on = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    /* ---- System key down (Alt press for heatmap peek) ---- */
+    case WM_SYSKEYDOWN:
+        if (wp == VK_MENU && !g_alt_heatmap && g_game->board &&
+            g_game->board->state == STATE_PLAYING) {
+            g_alt_heatmap = 1;
+            g_game->heatmap_on = 1;
+            if (g_prob_map)
+                solver_compute_probabilities(g_game->board, g_prob_map);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        break;
+
+    /* ---- System key up (Alt release for heatmap peek) ---- */
+    case WM_SYSKEYUP:
+        if (wp == VK_MENU && g_alt_heatmap) {
+            g_alt_heatmap = 0;
+            g_game->heatmap_on = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        break;
 
     /* ---- Window destruction ---- */
     case WM_DESTROY:
@@ -1711,6 +2032,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, TIMER_REPLAY);
         KillTimer(hwnd, TIMER_NET_POLL);
         KillTimer(hwnd, TIMER_NET_ACCEPT);
+        KillTimer(hwnd, TIMER_ANIM);
+        KillTimer(hwnd, TIMER_CURSOR);
+        KillTimer(hwnd, TIMER_AUTOPLAY);
 
         if (g_renderer)  { render_destroy(g_renderer);  g_renderer = NULL; }
         if (g_prob_map)  { free(g_prob_map);             g_prob_map = NULL; }
@@ -1774,6 +2098,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_game->press_cy = -1;
     g_game->explode_x = -1;
     g_game->explode_y = -1;
+
+    /* Initialize new game fields */
+    g_game->cursor_x = 0;
+    g_game->cursor_y = 0;
+    g_game->cursor_visible = 0;
+    g_game->cursor_blink = 0;
+    g_game->anim_active = 0;
+    g_game->anim_cells = NULL;
+    g_game->anim_count = 0;
+    g_game->anim_index = 0;
+    g_game->autoplay_active = 0;
+    g_game->autoplay_hl_x = -1;
+    g_game->autoplay_hl_y = -1;
+    g_game->toroidal_mode = 0;
 
     /* ---- Register window class ---- */
     WNDCLASSEXW wc = {0};
