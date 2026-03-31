@@ -947,7 +947,96 @@ int solver_step(Board *b, SolverAction *out)
         }
     }
 
-    /* No trivial action found */
+    /* Rule 3: Constraint subtraction — for each pair of adjacent revealed
+       numbered cells A and B, check if SA ⊂ SB (proper subset).
+       If so, cells in SB \ SA are either all safe or all mines. */
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            Cell *cA = board_cell(b, x, y);
+            if (!(cA->flags & CELL_REVEALED) || cA->number == 0) continue;
+
+            int sA_x[8], sA_y[8];
+            int nA = get_unrevealed_neighbors(b, x, y, sA_x, sA_y);
+            if (nA == 0) continue;
+            int rA = cA->number - board_count_adjacent_flags(b, x, y);
+
+            /* Look at each neighbor of A that is also revealed+numbered */
+            for (int d = 0; d < 8; d++) {
+                int bx, by;
+                if (!board_get_neighbor(b, x, y, d, &bx, &by)) continue;
+                Cell *cB = board_cell(b, bx, by);
+                if (!(cB->flags & CELL_REVEALED) || cB->number == 0) continue;
+
+                int sB_x[8], sB_y[8];
+                int nB = get_unrevealed_neighbors(b, bx, by, sB_x, sB_y);
+                if (nB == 0) continue;
+                int rB = cB->number - board_count_adjacent_flags(b, bx, by);
+
+                /* Check if SA ⊂ SB (proper subset: every element of SA in SB, and nA < nB) */
+                int sa_subset_of_sb = 1;
+                for (int i = 0; i < nA && sa_subset_of_sb; i++) {
+                    int found = 0;
+                    for (int j = 0; j < nB; j++) {
+                        if (sA_x[i] == sB_x[j] && sA_y[i] == sB_y[j]) {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (!found) sa_subset_of_sb = 0;
+                }
+
+                if (sa_subset_of_sb && nA < nB) {
+                    /* SA ⊂ SB — compute diff = SB \ SA */
+                    int diff_x[8], diff_y[8];
+                    int diff_count = 0;
+                    for (int j = 0; j < nB; j++) {
+                        int in_sa = 0;
+                        for (int i = 0; i < nA; i++) {
+                            if (sB_x[j] == sA_x[i] && sB_y[j] == sA_y[i]) {
+                                in_sa = 1;
+                                break;
+                            }
+                        }
+                        if (!in_sa) {
+                            diff_x[diff_count] = sB_x[j];
+                            diff_y[diff_count] = sB_y[j];
+                            diff_count++;
+                        }
+                    }
+
+                    int diff_mines = rB - rA;
+
+                    if (diff_mines == 0 && diff_count > 0) {
+                        /* All cells in SB \ SA are safe — reveal the first one */
+                        board_reveal(b, diff_x[0], diff_y[0]);
+                        out->action = 0;
+                        out->x = diff_x[0];
+                        out->y = diff_y[0];
+                        out->reason_x = x;
+                        out->reason_y = y;
+                        return 1;
+                    }
+
+                    if (diff_mines == diff_count && diff_count > 0) {
+                        /* All cells in SB \ SA are mines — flag the first one */
+                        Cell *dc = board_cell(b, diff_x[0], diff_y[0]);
+                        if (!(dc->flags & CELL_FLAGGED)) {
+                            dc->flags |= CELL_FLAGGED;
+                            b->flagged_count++;
+                            out->action = 1;
+                            out->x = diff_x[0];
+                            out->y = diff_y[0];
+                            out->reason_x = x;
+                            out->reason_y = y;
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* No action found (trivial or constraint subtraction) */
     out->action = -1;
     out->x = out->y = -1;
     out->reason_x = out->reason_y = -1;

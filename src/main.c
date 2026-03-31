@@ -60,6 +60,13 @@ static NetState *g_net = NULL;
 static int g_lmb_down = 0;
 static int g_rmb_down = 0;
 
+/* Replay playback */
+static int      g_playback_active = 0;
+static Replay  *g_playback_replay = NULL;
+static int      g_playback_index = 0;
+static DWORD    g_playback_start = 0;
+static int      g_playback_speed = 2;  /* 2x speed default */
+
 /* Konami Code sequence: Up Up Down Down Left Right Left Right B A */
 static int g_konami_seq[] = {VK_UP,VK_UP,VK_DOWN,VK_DOWN,VK_LEFT,VK_RIGHT,VK_LEFT,VK_RIGHT,'B','A'};
 static int g_konami_index = 0;
@@ -735,6 +742,7 @@ static HMENU create_menu(void)
     AppendMenuW(func, MF_SEPARATOR, 0, NULL);
     AppendMenuW(func, MF_STRING,    IDM_REPLAY_SAVE,    L"\x4FDD\x5B58\x56DE\x653E(&S)");  /* 保存回放 */
     AppendMenuW(func, MF_STRING,    IDM_REPLAY_LOAD,    L"\x52A0\x8F7D\x56DE\x653E(&L)");  /* 加载回放 */
+    AppendMenuW(func, MF_STRING,    IDM_REPLAY_PLAY,    L"\x64AD\x653E\x56DE\x653E(&R)");  /* 播放回放 */
     AppendMenuW(func, MF_SEPARATOR, 0, NULL);
     AppendMenuW(func, MF_STRING,    IDM_TOROIDAL,       L"\x73AF\x9762\x6A21\x5F0F(&T)");  /* 环面模式 */
     AppendMenuW(func, MF_STRING,    IDM_AUTOPLAY,       L"AI\x81EA\x52A8\x6F14\x793A(&A)"); /* AI自动演示 */
@@ -764,6 +772,17 @@ static HMENU create_menu(void)
     CheckMenuRadioItem(theme, IDM_THEME_CLASSIC, IDM_THEME_RETRO,
                        IDM_THEME_CLASSIC, MF_BYCOMMAND);
 
+    /* --- Icons menu (图标) --- */
+    HMENU icons = CreatePopupMenu();
+    AppendMenuW(icons, MF_STRING, IDM_ICON_CLASSIC,   L"\x7ECF\x5178\x5706\x7403(&1)");   /* 经典圆球 */
+    AppendMenuW(icons, MF_STRING, IDM_ICON_SKULL,      L"\x9AB7\x9AC5\x5934(&2)");          /* 骷髅头 */
+    AppendMenuW(icons, MF_STRING, IDM_ICON_BOMB,       L"\x70B8\x5F39(&3)");                 /* 炸弹 */
+    AppendMenuW(icons, MF_STRING, IDM_ICON_RADIATION,  L"\x8F90\x5C04(&4)");                 /* 辐射 */
+    AppendMenuW(icons, MF_STRING, IDM_ICON_STAR,       L"\x661F\x5F62(&5)");                 /* 星形 */
+    AppendMenuW(icons, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(icons, MF_STRING, IDM_ICON_CUSTOM,     L"\x81EA\x5B9A\x4E49\x56FE\x7247..."); /* 自定义图片... */
+    CheckMenuRadioItem(icons, IDM_ICON_CLASSIC, IDM_ICON_STAR, IDM_ICON_CLASSIC, MF_BYCOMMAND);
+
     /* --- Help menu (帮助) --- */
     AppendMenuW(help, MF_STRING,    IDM_STATS,          L"\x7EDF\x8BA1(&S)");          /* 统计 */
     AppendMenuW(help, MF_STRING,    IDM_ABOUT,          L"\x5173\x4E8E(&A)");          /* 关于 */
@@ -773,6 +792,7 @@ static HMENU create_menu(void)
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)func,  L"\x529F\x80FD(&F)");  /* 功能 */
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)net,   L"\x8054\x673A(&M)");  /* 联机 */
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)theme, L"\x4E3B\x9898(&S)");  /* 主题 */
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)icons, L"\x56FE\x6807(&I)");  /* 图标 */
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)help,  L"\x5E2E\x52A9(&H)");  /* 帮助 */
 
     return bar;
@@ -829,6 +849,8 @@ static void start_new_game(HWND hwnd, Difficulty diff)
     g_game->autoplay_active = 0;
     g_game->autoplay_hl_x = -1;
     g_game->autoplay_hl_y = -1;
+    g_game->hover_x = -1;
+    g_game->hover_y = -1;
     if (g_game->board) g_game->board->toroidal = g_game->toroidal_mode;
 
     resize_window(hwnd);
@@ -874,6 +896,8 @@ static void start_new_game_custom(HWND hwnd, int w, int h, int mines)
     g_game->autoplay_active = 0;
     g_game->autoplay_hl_x = -1;
     g_game->autoplay_hl_y = -1;
+    g_game->hover_x = -1;
+    g_game->hover_y = -1;
     if (g_game->board) g_game->board->toroidal = g_game->toroidal_mode;
 
     resize_window(hwnd);
@@ -983,17 +1007,8 @@ static void handle_game_end(HWND hwnd)
     }
     else if (b->state == STATE_LOST) {
         sound_explode();
-        stats_record_game(g_stats, g_game->difficulty, 0,
-                          g_game->elapsed_seconds);
-        stats_save(g_stats, stats_file);
 
-        /* Send game end to peer */
-        if (g_net && g_net->connected) {
-            net_send_game_end(g_net, 0);
-            net_send_state(g_net, b->revealed_count, b->flagged_count, STATE_LOST);
-        }
-
-        /* Window shake on loss */
+        /* Window shake effect */
         {
             RECT wr;
             GetWindowRect(hwnd, &wr);
@@ -1003,6 +1018,16 @@ static void handle_game_end(HWND hwnd)
                 Sleep(40);
             }
             SetWindowPos(hwnd, NULL, wr.left, wr.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
+
+        stats_record_game(g_stats, g_game->difficulty, 0,
+                          g_game->elapsed_seconds);
+        stats_save(g_stats, stats_file);
+
+        /* Send game end to peer */
+        if (g_net && g_net->connected) {
+            net_send_game_end(g_net, 0);
+            net_send_state(g_net, b->revealed_count, b->flagged_count, STATE_LOST);
         }
     }
 
@@ -1377,6 +1402,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     /* ---- Left mouse button DOWN ---- */
     case WM_LBUTTONDOWN: {
+        if (g_playback_active) return 0;
         /* Block input during animation */
         if (g_game->anim_active) return 0;
 
@@ -1503,6 +1529,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     /* ---- Right mouse button DOWN ---- */
     case WM_RBUTTONDOWN: {
+        if (g_playback_active) return 0;
         /* Block input during animation */
         if (g_game->anim_active) return 0;
 
@@ -1552,6 +1579,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     /* ---- Middle mouse button (chord) ---- */
     case WM_MBUTTONDOWN: {
+        if (g_playback_active) return 0;
         /* Block input during animation */
         if (g_game->anim_active) return 0;
 
@@ -1583,8 +1611,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
 
-    /* ---- Mouse move (for chord press visual feedback) ---- */
+    /* ---- Mouse move (hover tracking + chord press visual feedback) ---- */
     case WM_MOUSEMOVE: {
+        /* Hover tracking */
+        {
+            Board *b = g_game->board;
+            if (b) {
+                int hx, hy;
+                if (render_pixel_to_cell(b->width, b->height, LOWORD(lp), HIWORD(lp), &hx, &hy)) {
+                    if (hx != g_game->hover_x || hy != g_game->hover_y) {
+                        g_game->hover_x = hx;
+                        g_game->hover_y = hy;
+                        InvalidateRect(hwnd, NULL, FALSE);
+                    }
+                } else {
+                    if (g_game->hover_x >= 0) {
+                        g_game->hover_x = -1;
+                        g_game->hover_y = -1;
+                        InvalidateRect(hwnd, NULL, FALSE);
+                    }
+                }
+            }
+        }
+
         if (g_game->press_active) {
             int px = LOWORD(lp);
             int py = HIWORD(lp);
@@ -1721,6 +1770,52 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         }
+        else if (wp == TIMER_REPLAY) {
+            if (g_playback_active && g_playback_replay) {
+                DWORD elapsed = (GetTickCount() - g_playback_start) * g_playback_speed;
+                while (g_playback_index < g_playback_replay->move_count) {
+                    MoveRecord *m = &g_playback_replay->moves[g_playback_index];
+                    if (m->tick_ms > elapsed) break;
+
+                    /* Execute this move */
+                    switch (m->action) {
+                    case ACTION_LEFT:
+                        game_left_click(g_game, m->x, m->y);
+                        if (g_game->anim_active)
+                            SetTimer(hwnd, TIMER_ANIM, 15, NULL);
+                        break;
+                    case ACTION_RIGHT:
+                        game_right_click(g_game, m->x, m->y);
+                        break;
+                    case ACTION_CHORD:
+                        game_chord_click(g_game, m->x, m->y);
+                        break;
+                    }
+                    g_playback_index++;
+
+                    Board *b = g_game->board;
+                    if (b && (b->state == STATE_WON || b->state == STATE_LOST)) {
+                        g_playback_active = 0;
+                        KillTimer(hwnd, TIMER_REPLAY);
+                        handle_game_end(hwnd);
+                        replay_destroy(g_playback_replay);
+                        g_playback_replay = NULL;
+                        break;
+                    }
+                }
+
+                /* Check if replay finished */
+                if (g_playback_replay && g_playback_index >= g_playback_replay->move_count) {
+                    g_playback_active = 0;
+                    KillTimer(hwnd, TIMER_REPLAY);
+                    replay_destroy(g_playback_replay);
+                    g_playback_replay = NULL;
+                }
+
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
         return 0;
 
     /* ---- Menu commands ---- */
@@ -1791,6 +1886,38 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             do_replay_load(hwnd);
             break;
 
+        case IDM_REPLAY_PLAY: {
+            /* Load replay file */
+            OPENFILENAMEW ofn = {0};
+            wchar_t path[MAX_PATH] = L"";
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"\x56DE\x653E\x6587\x4EF6 (*.msrep)\0*.msrep\0*.*\0*.*\0";
+            ofn.lpstrFile = path;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrTitle = L"\x52A0\x8F7D\x56DE\x653E";
+            ofn.Flags = OFN_FILEMUSTEXIST;
+            if (GetOpenFileNameW(&ofn)) {
+                char narrow[MAX_PATH];
+                WideCharToMultiByte(CP_UTF8, 0, path, -1, narrow, MAX_PATH, NULL, NULL);
+                Replay *rp = replay_load(narrow);
+                if (rp && rp->move_count > 0) {
+                    /* Start new game matching replay dimensions */
+                    start_new_game_custom(hwnd, rp->width, rp->height, rp->mine_count);
+                    g_playback_replay = rp;
+                    g_playback_index = 0;
+                    g_playback_active = 1;
+                    g_playback_start = GetTickCount();
+                    SetTimer(hwnd, TIMER_REPLAY, 50, NULL);
+                } else {
+                    if (rp) replay_destroy(rp);
+                    MessageBoxW(hwnd, L"\x56DE\x653E\x6587\x4EF6\x4E3A\x7A7A\xFF01",
+                        L"\x9519\x8BEF", MB_OK | MB_ICONERROR);
+                }
+            }
+            break;
+        }
+
         case IDM_TOROIDAL:
             g_game->toroidal_mode = !g_game->toroidal_mode;
             if (g_game->board) g_game->board->toroidal = g_game->toroidal_mode;
@@ -1824,6 +1951,33 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             InvalidateRect(hwnd, NULL, FALSE);
             break;
+
+        case IDM_ICON_CLASSIC: case IDM_ICON_SKULL: case IDM_ICON_BOMB:
+        case IDM_ICON_RADIATION: case IDM_ICON_STAR: {
+            int idx = LOWORD(wp) - IDM_ICON_CLASSIC;
+            g_renderer->mine_icon = idx;
+            CheckMenuRadioItem(g_menu, IDM_ICON_CLASSIC, IDM_ICON_STAR,
+                               LOWORD(wp), MF_BYCOMMAND);
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+        }
+
+        case IDM_ICON_CUSTOM: {
+            OPENFILENAMEW ofn = {0};
+            wchar_t path[MAX_PATH] = L"";
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"BMP\x56FE\x7247 (*.bmp)\0*.bmp\0*.*\0*.*\0";
+            ofn.lpstrFile = path;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrTitle = L"\x9009\x62E9\x96F7\x56FE\x6807";  /* 选择雷图标 */
+            ofn.Flags = OFN_FILEMUSTEXIST;
+            if (GetOpenFileNameW(&ofn)) {
+                render_load_custom_mine(g_renderer, hwnd, path);
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            break;
+        }
 
         case IDM_STATS:
             show_stats_dialog(hwnd);
@@ -2036,6 +2190,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, TIMER_CURSOR);
         KillTimer(hwnd, TIMER_AUTOPLAY);
 
+        if (g_playback_replay) { replay_destroy(g_playback_replay); g_playback_replay = NULL; }
+        g_playback_active = 0;
+
         if (g_renderer)  { render_destroy(g_renderer);  g_renderer = NULL; }
         if (g_prob_map)  { free(g_prob_map);             g_prob_map = NULL; }
 
@@ -2112,6 +2269,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_game->autoplay_hl_x = -1;
     g_game->autoplay_hl_y = -1;
     g_game->toroidal_mode = 0;
+    g_game->hover_x = -1;
+    g_game->hover_y = -1;
 
     /* ---- Register window class ---- */
     WNDCLASSEXW wc = {0};

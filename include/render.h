@@ -31,6 +31,9 @@ typedef struct {
     HFONT   font_header;
     HFONT   font_toolbar;
     int     theme_index;        /* current theme 0-3 */
+    int     mine_icon;          /* mine icon style 0-4, 5=custom */
+    HBITMAP custom_mine_bmp;    /* user-loaded BMP for custom mine icon */
+    HDC     custom_mine_dc;     /* compatible DC for custom BMP */
 } Renderer;
 
 /* Create / destroy renderer */
@@ -56,5 +59,8 @@ int  render_face_hit(int board_w, int client_w, int px, int py);
 /* Theme management */
 void render_set_theme(Renderer *r, int index);
 const ColorTheme *render_get_theme(Renderer *r);
+
+/* Custom mine icon: load BMP from file path */
+void render_load_custom_mine(Renderer *r, HWND hwnd, const wchar_t *path);
 
 #endif /* RENDER_H */

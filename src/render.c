@@ -175,8 +175,22 @@ static void draw_cell_raised(HDC hdc, int x, int y, int sz)
     HPEN penDk  = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_dkgray);
     HPEN oldPen;
 
-    /* Fill with standard gray */
-    fill_rect_color(hdc, x, y, sz, sz, THEMES[g_theme].cell_raised);
+    /* Gradient fill: subtle top-to-bottom darkening (4 strips) */
+    {
+        COLORREF base = THEMES[g_theme].cell_raised;
+        int r0 = GetRValue(base), g0 = GetGValue(base), b0 = GetBValue(base);
+        int strip_h = sz / 4;
+        for (int s = 0; s < 4; s++) {
+            int darken = s * 4;  /* subtle: 0, 4, 8, 12 */
+            int sr = r0 - darken > 0 ? r0 - darken : 0;
+            int sg = g0 - darken > 0 ? g0 - darken : 0;
+            int sb = b0 - darken > 0 ? b0 - darken : 0;
+            HBRUSH br = CreateSolidBrush(RGB(sr, sg, sb));
+            RECT strip = { x, y + s*strip_h, x+sz, y + (s == 3 ? sz : (s+1)*strip_h) };
+            FillRect(hdc, &strip, br);
+            DeleteObject(br);
+        }
+    }
 
     /* 2px white highlight on top and left edges */
     oldPen = (HPEN)SelectObject(hdc, penWh);
@@ -295,16 +309,16 @@ static void draw_flag(HDC hdc, int cx, int cy, int sz)
 }
 
 /* ================================================================== */
-/*  Helper: draw mine (black circle with spikes)                       */
+/*  Helper: draw mine - classic style (black circle with spikes)       */
 /* ================================================================== */
-static void draw_mine(HDC hdc, int cx, int cy, int sz)
+static void draw_mine_classic(HDC hdc, int cx, int cy, int sz, COLORREF mc)
 {
     int midx = cx + sz / 2;
     int midy = cy + sz / 2;
     int rad  = sz / 2 - 5;
 
     /* Spikes (cross lines) */
-    HPEN spkPen = CreatePen(PS_SOLID, 2, THEMES[g_theme].mine_color);
+    HPEN spkPen = CreatePen(PS_SOLID, 2, mc);
     HPEN oldPen = (HPEN)SelectObject(hdc, spkPen);
     /* Vertical */
     MoveToEx(hdc, midx, midy - rad - 2, NULL);
@@ -322,8 +336,8 @@ static void draw_mine(HDC hdc, int cx, int cy, int sz)
     DeleteObject(spkPen);
 
     /* Main body (filled circle) */
-    HBRUSH br = CreateSolidBrush(THEMES[g_theme].mine_color);
-    HPEN   pen = CreatePen(PS_SOLID, 1, THEMES[g_theme].mine_color);
+    HBRUSH br = CreateSolidBrush(mc);
+    HPEN   pen = CreatePen(PS_SOLID, 1, mc);
     HBRUSH oldBr = (HBRUSH)SelectObject(hdc, br);
     oldPen = (HPEN)SelectObject(hdc, pen);
     Ellipse(hdc, midx - rad, midy - rad, midx + rad, midy + rad);
@@ -344,6 +358,243 @@ static void draw_mine(HDC hdc, int cx, int cy, int sz)
     SelectObject(hdc, oldPen);
     DeleteObject(wh);
     DeleteObject(wpen);
+}
+
+/* ================================================================== */
+/*  Helper: draw mine - skull style                                    */
+/* ================================================================== */
+static void draw_mine_skull(HDC hdc, int cx, int cy, int sz, COLORREF mc)
+{
+    int midx = cx + sz / 2;
+    int midy = cy + sz / 2;
+    int rad  = sz / 2 - 6;
+
+    HBRUSH br = CreateSolidBrush(mc);
+    HPEN   pen = CreatePen(PS_SOLID, 1, mc);
+    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, br);
+    HPEN   oldPen = (HPEN)SelectObject(hdc, pen);
+
+    /* Round head */
+    Ellipse(hdc, midx - rad, midy - rad - 1, midx + rad, midy + rad - 3);
+
+    /* Two small filled circles for eyes */
+    HBRUSH eyeBr = CreateSolidBrush(THEMES[g_theme].cell_revealed);
+    HPEN   eyePen = CreatePen(PS_SOLID, 1, THEMES[g_theme].cell_revealed);
+    SelectObject(hdc, eyeBr);
+    SelectObject(hdc, eyePen);
+    int er = 2;
+    Ellipse(hdc, midx - 4 - er, midy - 3 - er, midx - 4 + er, midy - 3 + er);
+    Ellipse(hdc, midx + 4 - er, midy - 3 - er, midx + 4 + er, midy - 3 + er);
+
+    /* Mouth: horizontal line */
+    SelectObject(hdc, pen);
+    MoveToEx(hdc, midx - 4, midy + 2, NULL);
+    LineTo(hdc, midx + 5, midy + 2);
+
+    /* Jaw / chin vertical lines */
+    MoveToEx(hdc, midx - 2, midy + 2, NULL);
+    LineTo(hdc, midx - 2, midy + 5);
+    MoveToEx(hdc, midx + 2, midy + 2, NULL);
+    LineTo(hdc, midx + 2, midy + 5);
+
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(br);
+    DeleteObject(pen);
+    DeleteObject(eyeBr);
+    DeleteObject(eyePen);
+}
+
+/* ================================================================== */
+/*  Helper: draw mine - bomb with fuse style                           */
+/* ================================================================== */
+static void draw_mine_bomb(HDC hdc, int cx, int cy, int sz, COLORREF mc)
+{
+    int midx = cx + sz / 2;
+    int midy = cy + sz / 2 + 2;
+    int rad  = sz / 2 - 7;
+
+    /* Main body (filled circle) */
+    HBRUSH br = CreateSolidBrush(mc);
+    HPEN   pen = CreatePen(PS_SOLID, 1, mc);
+    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, br);
+    HPEN   oldPen = (HPEN)SelectObject(hdc, pen);
+    Ellipse(hdc, midx - rad, midy - rad, midx + rad, midy + rad);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(br);
+    DeleteObject(pen);
+
+    /* Fuse: arc from top-right */
+    HPEN fusePen = CreatePen(PS_SOLID, 2, mc);
+    oldPen = (HPEN)SelectObject(hdc, fusePen);
+    int fx = midx + rad - 2;
+    int fy = midy - rad;
+    MoveToEx(hdc, fx, fy, NULL);
+    LineTo(hdc, fx + 3, fy - 4);
+    LineTo(hdc, fx + 1, fy - 7);
+    SelectObject(hdc, oldPen);
+    DeleteObject(fusePen);
+
+    /* Sparks: small dots at fuse tip */
+    COLORREF spark = RGB(255, 200, 0);
+    HBRUSH sparkBr = CreateSolidBrush(spark);
+    HPEN sparkPen = CreatePen(PS_SOLID, 1, spark);
+    oldBr = (HBRUSH)SelectObject(hdc, sparkBr);
+    oldPen = (HPEN)SelectObject(hdc, sparkPen);
+    Ellipse(hdc, fx, fy - 9, fx + 3, fy - 6);
+    Ellipse(hdc, fx + 3, fy - 10, fx + 5, fy - 8);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(sparkBr);
+    DeleteObject(sparkPen);
+
+    /* Specular highlight */
+    HBRUSH wh = CreateSolidBrush(THEMES[g_theme].border_white);
+    HPEN wpen = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
+    oldBr = (HBRUSH)SelectObject(hdc, wh);
+    oldPen = (HPEN)SelectObject(hdc, wpen);
+    Ellipse(hdc, midx - rad/2 - 1, midy - rad/2 - 1,
+                 midx - rad/2 + 2, midy - rad/2 + 2);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(wh);
+    DeleteObject(wpen);
+}
+
+/* ================================================================== */
+/*  Helper: draw mine - radiation symbol style                         */
+/* ================================================================== */
+static void draw_mine_radiation(HDC hdc, int cx, int cy, int sz, COLORREF mc)
+{
+    int midx = cx + sz / 2;
+    int midy = cy + sz / 2;
+    int rad  = sz / 2 - 5;
+
+    HBRUSH br = CreateSolidBrush(mc);
+    HPEN   pen = CreatePen(PS_SOLID, 1, mc);
+    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, br);
+    HPEN   oldPen = (HPEN)SelectObject(hdc, pen);
+
+    /* Three pie/fan sectors at 120-degree intervals */
+    int inner_r = rad / 3;
+    /* Sector 1: top (270 +/- 30 degrees) */
+    Pie(hdc, midx - rad, midy - rad, midx + rad, midy + rad,
+        midx + (int)(rad * cos(-60.0 * 3.14159265/180.0)),
+        midy + (int)(rad * sin(-60.0 * 3.14159265/180.0)),
+        midx + (int)(rad * cos(-120.0 * 3.14159265/180.0)),
+        midy + (int)(rad * sin(-120.0 * 3.14159265/180.0)));
+    /* Sector 2: bottom-right (30 +/- 30) */
+    Pie(hdc, midx - rad, midy - rad, midx + rad, midy + rad,
+        midx + (int)(rad * cos(60.0 * 3.14159265/180.0)),
+        midy + (int)(rad * sin(60.0 * 3.14159265/180.0)),
+        midx + (int)(rad * cos(0.0 * 3.14159265/180.0)),
+        midy + (int)(rad * sin(0.0 * 3.14159265/180.0)));
+    /* Sector 3: bottom-left (150 +/- 30) */
+    Pie(hdc, midx - rad, midy - rad, midx + rad, midy + rad,
+        midx + (int)(rad * cos(180.0 * 3.14159265/180.0)),
+        midy + (int)(rad * sin(180.0 * 3.14159265/180.0)),
+        midx + (int)(rad * cos(120.0 * 3.14159265/180.0)),
+        midy + (int)(rad * sin(120.0 * 3.14159265/180.0)));
+
+    /* Center circle (hole) in background colour */
+    HBRUSH bgBr = CreateSolidBrush(THEMES[g_theme].cell_revealed);
+    HPEN bgPen = CreatePen(PS_SOLID, 1, THEMES[g_theme].cell_revealed);
+    SelectObject(hdc, bgBr);
+    SelectObject(hdc, bgPen);
+    Ellipse(hdc, midx - inner_r, midy - inner_r, midx + inner_r, midy + inner_r);
+
+    /* Small center dot in mine colour */
+    SelectObject(hdc, br);
+    SelectObject(hdc, pen);
+    int dot_r = 2;
+    Ellipse(hdc, midx - dot_r, midy - dot_r, midx + dot_r, midy + dot_r);
+
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(br);
+    DeleteObject(pen);
+    DeleteObject(bgBr);
+    DeleteObject(bgPen);
+}
+
+/* ================================================================== */
+/*  Helper: draw mine - 8-point star style                             */
+/* ================================================================== */
+static void draw_mine_star(HDC hdc, int cx, int cy, int sz, COLORREF mc)
+{
+    int midx = cx + sz / 2;
+    int midy = cy + sz / 2;
+    int outer_r = sz / 2 - 5;
+    int inner_r = outer_r / 2;
+    double pi = 3.14159265358979;
+
+    POINT pts[16];
+    for (int i = 0; i < 16; i++) {
+        double angle = pi / 2.0 + i * (2.0 * pi / 16.0);
+        int rr = (i % 2 == 0) ? outer_r : inner_r;
+        pts[i].x = midx + (int)(rr * cos(angle));
+        pts[i].y = midy - (int)(rr * sin(angle));
+    }
+
+    HBRUSH br = CreateSolidBrush(mc);
+    HPEN   pen = CreatePen(PS_SOLID, 1, mc);
+    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, br);
+    HPEN   oldPen = (HPEN)SelectObject(hdc, pen);
+    Polygon(hdc, pts, 16);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(br);
+    DeleteObject(pen);
+
+    /* Small specular highlight */
+    HBRUSH wh = CreateSolidBrush(THEMES[g_theme].border_white);
+    HPEN wpen = CreatePen(PS_SOLID, 1, THEMES[g_theme].border_white);
+    oldBr = (HBRUSH)SelectObject(hdc, wh);
+    oldPen = (HPEN)SelectObject(hdc, wpen);
+    Ellipse(hdc, midx - 3, midy - 3, midx, midy);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(wh);
+    DeleteObject(wpen);
+}
+
+/* ================================================================== */
+/*  Mine icon dispatcher: selects style from Renderer mine_icon field  */
+/* ================================================================== */
+static void draw_mine_icon(HDC hdc, Renderer *r, int cx, int cy, int sz)
+{
+    COLORREF mc = THEMES[g_theme].mine_color;
+    int pad = 5;
+
+    if (r->mine_icon == 5 && r->custom_mine_bmp) {
+        /* Custom BMP: StretchBlt from custom_mine_dc */
+        StretchBlt(hdc, cx+pad, cy+pad, sz-2*pad, sz-2*pad,
+                   r->custom_mine_dc, 0, 0,
+                   sz-2*pad, sz-2*pad, SRCCOPY);
+        return;
+    }
+
+    switch (r->mine_icon) {
+    case 0: /* Classic: circle + cross spikes */
+        draw_mine_classic(hdc, cx, cy, sz, mc);
+        break;
+    case 1: /* Skull */
+        draw_mine_skull(hdc, cx, cy, sz, mc);
+        break;
+    case 2: /* Bomb with fuse */
+        draw_mine_bomb(hdc, cx, cy, sz, mc);
+        break;
+    case 3: /* Radiation symbol */
+        draw_mine_radiation(hdc, cx, cy, sz, mc);
+        break;
+    case 4: /* Star */
+        draw_mine_star(hdc, cx, cy, sz, mc);
+        break;
+    default:
+        draw_mine_classic(hdc, cx, cy, sz, mc);
+        break;
+    }
 }
 
 /* ================================================================== */
@@ -530,6 +781,9 @@ Renderer *render_create(HWND hwnd, int w, int h)
     if (!r) return NULL;
 
     r->theme_index = 0;
+    r->mine_icon = 0;
+    r->custom_mine_bmp = NULL;
+    r->custom_mine_dc = NULL;
 
     HDC screen_dc = GetDC(hwnd);
     r->mem_dc  = CreateCompatibleDC(screen_dc);
@@ -571,6 +825,9 @@ void render_destroy(Renderer *r)
     if (r->font_num)    DeleteObject(r->font_num);
     if (r->font_header) DeleteObject(r->font_header);
     if (r->font_toolbar)DeleteObject(r->font_toolbar);
+    /* Clean up custom mine icon resources */
+    if (r->custom_mine_dc)  { DeleteDC(r->custom_mine_dc);  r->custom_mine_dc = NULL; }
+    if (r->custom_mine_bmp) { DeleteObject(r->custom_mine_bmp); r->custom_mine_bmp = NULL; }
     free(r);
 }
 
@@ -710,13 +967,13 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                     /* RED background for the mine the player clicked */
                     draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
                                        THEMES[g_theme].explode_bg);
-                    draw_mine(hdc, cell_x, cell_y, CELL_SIZE);
+                    draw_mine_icon(hdc, r, cell_x, cell_y, CELL_SIZE);
                 }
                 else if (is_mine) {
                     /* Other revealed mines on loss: gray bg + mine */
                     draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
                                        THEMES[g_theme].cell_revealed);
-                    draw_mine(hdc, cell_x, cell_y, CELL_SIZE);
+                    draw_mine_icon(hdc, r, cell_x, cell_y, CELL_SIZE);
                 }
                 else if (c->number > 0 && c->number <= 8) {
                     /* Numbered cell */
@@ -727,6 +984,15 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                                  cell_x + CELL_SIZE, cell_y + CELL_SIZE };
                     HFONT oldFont = (HFONT)SelectObject(hdc, r->font_num);
                     SetBkMode(hdc, TRANSPARENT);
+                    /* Shadow: offset +1,+1 in dark color */
+                    {
+                        RECT src = { cell_x+1, cell_y+1,
+                                     cell_x+CELL_SIZE+1, cell_y+CELL_SIZE+1 };
+                        SetTextColor(hdc, RGB(60, 60, 60));
+                        DrawTextW(hdc, num_str, 1, &src,
+                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    }
+                    /* Normal number on top */
                     SetTextColor(hdc, THEMES[g_theme].num_colors[c->number]);
                     DrawTextW(hdc, num_str, 1, &nrc,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -754,7 +1020,7 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                         /* Unrevealed mine on loss: show it flat */
                         draw_cell_revealed(hdc, cell_x, cell_y, CELL_SIZE,
                                            THEMES[g_theme].cell_revealed);
-                        draw_mine(hdc, cell_x, cell_y, CELL_SIZE);
+                        draw_mine_icon(hdc, r, cell_x, cell_y, CELL_SIZE);
                         goto next_cell;
                     }
                 }
@@ -820,6 +1086,18 @@ void render_paint(Renderer *r, HWND hwnd, Game *g, double *prob_map)
                         DeleteObject(smallFont);
                     }
                 }
+            }
+
+            /* --- Mouse hover highlight on unrevealed cells --- */
+            if (cx == g->hover_x && cy == g->hover_y && !is_rev && !g->press_active) {
+                HPEN hp = CreatePen(PS_SOLID, 1, RGB(100, 180, 255));
+                HPEN old_hp = (HPEN)SelectObject(hdc, hp);
+                HBRUSH old_hb = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, cell_x+1, cell_y+1,
+                          cell_x+CELL_SIZE-1, cell_y+CELL_SIZE-1);
+                SelectObject(hdc, old_hb);
+                SelectObject(hdc, old_hp);
+                DeleteObject(hp);
             }
 
             /* --- Hint highlight --- */
@@ -1021,4 +1299,24 @@ int render_face_hit(int board_w, int client_w, int px, int py)
         return 1;
     }
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  render_load_custom_mine                                            */
+/* ------------------------------------------------------------------ */
+void render_load_custom_mine(Renderer *r, HWND hwnd, const wchar_t *path)
+{
+    /* Clean up old */
+    if (r->custom_mine_dc)  { DeleteDC(r->custom_mine_dc);  r->custom_mine_dc = NULL; }
+    if (r->custom_mine_bmp) { DeleteObject(r->custom_mine_bmp); r->custom_mine_bmp = NULL; }
+
+    r->custom_mine_bmp = (HBITMAP)LoadImageW(NULL, path, IMAGE_BITMAP,
+                                              0, 0, LR_LOADFROMFILE);
+    if (r->custom_mine_bmp) {
+        HDC screen = GetDC(hwnd);
+        r->custom_mine_dc = CreateCompatibleDC(screen);
+        SelectObject(r->custom_mine_dc, r->custom_mine_bmp);
+        ReleaseDC(hwnd, screen);
+        r->mine_icon = 5;
+    }
 }

@@ -36,6 +36,8 @@ typedef struct {
     int    autoplay_hl_x, autoplay_hl_y;  /* highlighted "reason" cell */
     /* Toroidal mode (donut topology) */
     int    toroidal_mode;       /* 1 = edges wrap around */
+    /* Mouse hover */
+    int    hover_x, hover_y;    /* cell under mouse cursor (-1 if none) */
 } Game;
 
 Game *game_create(void);

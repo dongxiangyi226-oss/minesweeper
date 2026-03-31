@@ -28,6 +28,14 @@
 #define IDM_THEME_OCEAN     4003
 #define IDM_THEME_RETRO     4004
 
+/* ---- Mine icon menu IDs ---- */
+#define IDM_ICON_CLASSIC    6001
+#define IDM_ICON_SKULL      6002
+#define IDM_ICON_BOMB       6003
+#define IDM_ICON_RADIATION  6004
+#define IDM_ICON_STAR       6005
+#define IDM_ICON_CUSTOM     6006
+
 /* ---- Multiplayer menu IDs ---- */
 #define IDM_NET_HOST        5001
 #define IDM_NET_JOIN        5002
